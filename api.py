@@ -375,6 +375,6 @@ def getUsers():
 if __name__ == "__main__":
     #test_connection()
    # getCompanies()
-    #app.run(debug=True)
-    createDataBase("127.0.0.1", "root", "root","achref")  
+    app.run(debug=True)
+    #createDataBase("127.0.0.1", "root", "root","achref")  
 

@@ -48,20 +48,39 @@ def test_connection():
         print("Connected to MySQL database")
     return connection
 
-
+# done : tri et recherche par nom
 @app.route('/GetCompanies', methods=['GET'])  
 def getCompanies():
-    #connection = getConnection()
+    sort_order = request.args.get('sort_order')
+    nom_entreprise = request.args.get('nom_entreprise')
     connection = test_connection()
     cursor = connection.cursor()
-    cursor.execute("select * from companies")
+    
+    base_query = "SELECT * FROM companies"
+    params = []
+    
+    if nom_entreprise:
+        base_query += " WHERE nom LIKE %s"
+        params.append(f"{nom_entreprise}%")
+    
+    if sort_order:
+        if sort_order.lower() == 'desc':
+            base_query += " ORDER BY nom DESC"
+        elif sort_order.lower() == 'asc':
+            base_query += " ORDER BY nom ASC"
+    
+    cursor.execute(base_query, tuple(params))
+    
     rows = cursor.fetchall()
     companies = [{'nom': row[1]} for row in rows]
+    
     cursor.close()
     connection.close()
+    
     return jsonify(companies)
 
-@app.route('/GetCompaniesWithId', methods=['GET']) # 2eme cas si on veux les id
+
+"""@app.route('/GetCompaniesWithId', methods=['GET']) # 2eme cas si on veux les id
 def getCompanies2():
     connection = test_connection()
     cursor = connection.cursor()
@@ -71,11 +90,11 @@ def getCompanies2():
     companies = [{'id': row[0], 'nom': row[1]} for row in rows]
     cursor.close()
     connection.close()
-    return jsonify(companies) 
+    return jsonify(companies) """
 
 
 
-
+# done
 
 @app.route('/GetClients', methods=['GET'])
 def getClients():
@@ -94,8 +113,8 @@ def getClients():
     secteur = request.args.get("secteur")
     ville = request.args.get("ville")
 
-    sort_by = request.args.get('sort_by','nom') # critere pas defaut
-    sort_order = request.args.get('sort_order','asc') #aussi
+    sort_by = request.args.get('sort_by')
+    sort_order = request.args.get('sort_order','asc') 
     
     if not nom_entreprise:
         return jsonify({"error": "nom_entreprise parameter is required"}), 400
@@ -114,21 +133,21 @@ def getClients():
     params = [nom_entreprise]
     
     if reference:
-        base_query += " AND c.reference = %s"
-        params.append(reference)
+        base_query += " AND c.reference like %s"
+        params.append(reference +'%')
     
     if nom:
         base_query += "AND c.nom LIKE %s"
         params.append(nom +'%')
     if status:
-        base_query += "AND c.status = %s"
-        params.append(status)
+        base_query += "AND c.status like %s"
+        params.append(status +'%')
     if email:
         base_query += "AND c.email = %s"
         params.append(email)
     if telephone:
-        base_query += "AND c.telephone = %s"
-        params.append(telephone)
+        base_query += "AND c.telephone like %s"
+        params.append(telephone +'%')
     if date_debut:
         try:
             date_obj = datetime.strptime(date_debut, '%Y-%m-%d').date()
@@ -145,19 +164,20 @@ def getClients():
         except ValueError as e:
             return jsonify({"error": "Invalid date format. Use YYYY-MM-DD."}), 400
     if evaluation:
-        base_query += "AND c.evaluation = %s"
-        params.append(evaluation)
+        base_query += "AND c.evaluation like %s"
+        params.append(evaluation +'%')
     if secteur:
-        base_query += "AND c.secteur = %s"
-        params.append(secteur)
+        base_query += "AND c.secteur like %s"
+        params.append(secteur +'%')
     if ville:
-        base_query += "AND c.ville = %s"
-        params.append(ville)
+        base_query += "AND c.ville like %s"
+        params.append(ville +'%')
 
-    if sort_order.lower() == 'desc':
-        base_query += " ORDER BY c.{} DESC".format(sort_by)
-    else:
-        base_query += " ORDER BY c.{} ASC".format(sort_by)
+    if sort_by:
+        if sort_order.lower() == 'desc':
+            base_query += " ORDER BY c.{} DESC".format(sort_by)
+        else:
+            base_query += " ORDER BY c.{} ASC".format(sort_by)
     
     cursor.execute(base_query, tuple(params))
     rows = cursor.fetchall()
@@ -187,10 +207,11 @@ def getClients():
     #return jsonify(clients)
 
 
-
+# done
 @app.route('/GetClientDetails/<reference>', methods=['GET'])
 def getClientDetail(reference):
     try:
+        
         connection = getConnection()
         cursor = connection.cursor()
 
@@ -208,19 +229,56 @@ def getClientDetail(reference):
             client_columns = [col.split(' AS ')[-1] if ' AS ' in col else col.split('.')[-1] for col in columns]
             client_details = OrderedDict(zip(client_columns, client))
 
+            
             if client_details["date_derniere_commande"]:
                 client_details["date_derniere_commande"] = client_details["date_derniere_commande"].isoformat()
-           
+
+            
+            contact_filters = {
+                "nom": request.args.get('contact_nom'),
+                "prenom": request.args.get('contact_prenom'),
+                "fonction": request.args.get('contact_fonction'),
+                "ville": request.args.get('contact_ville'),
+                "pays": request.args.get('contact_pays'),
+                "code_postal": request.args.get('contact_code_postal'),
+                "email": request.args.get('contact_email'),
+                "fax": request.args.get('contact_fax')
+            }
+            contact_tel = request.args.get('contact_tel')
+            sort_by = request.args.get('sort_by')
+            sort_order = request.args.get('sort_order')
+
             query_contacts = """
             SELECT c.nom, c.prenom, c.fonction, c.tel1, c.tel2, c.tel3, c.fax, c.email, c.adr_ligne1, c.adr_ligne2, c.code_postal, c.ville, c.pays, c.site_web
             FROM contact c
             JOIN clients cl ON c.ref_client = cl.id
             WHERE cl.reference = %s
             """
-            cursor.execute(query_contacts, (reference,))
+            params = [reference]
+
+            
+            for key, value in contact_filters.items():
+                if value:
+                    query_contacts += " AND c.{} LIKE %s".format(key)
+                    params.append(value +'%')
+
+            if contact_tel:   #contact_tel est le filtre pour les 3 num tel
+                query_contacts += " AND (c.tel1 LIKE %s OR c.tel2 LIKE %s OR c.tel3 LIKE %s)"
+                params.extend([f'{contact_tel}%', f'{contact_tel}%', f'{contact_tel}%'])
+
+            if sort_by:
+                if sort_order.lower() == "desc":
+                    query_contacts += " ORDER BY c.{} DESC".format(sort_by)
+                else:
+                    query_contacts += " ORDER BY c.{} ASC".format(sort_by)
+
+            
+            
+            cursor.execute(query_contacts, tuple(params))
             contacts = cursor.fetchall()
             contacts_list = [OrderedDict(zip(["nom", "prenom", "fonction", "tel1", "tel2", "tel3", "fax", "email", "adr_ligne1", "adr_ligne2", "code_postal", "ville", "pays", "site_web"], contact)) for contact in contacts]
 
+            
             response_data = {
                 "client_details": client_details,
                 "contacts": contacts_list
@@ -231,31 +289,30 @@ def getClientDetail(reference):
         else:
             return jsonify({"message": "Client non trouvé"}), 404
     except Exception as e:
-        # En cas d'erreur, retournez un message d'erreur approprié
         return jsonify({"message": str(e)}), 500
     finally:
         cursor.close()
         connection.close()
 
-
+#done
 @app.route('/GetOrders/<reference>', methods=['GET'])
 def GetOrders(reference):
     try:
         connection = getConnection()
         cursor = connection.cursor()
 
-        # Partie filtres
         status = request.args.get("status")
         date_debut = request.args.get("date_debut")
         date_fin = request.args.get("date_fin")
         montant_min = request.args.get("montant_min")
         montant_max = request.args.get("montant_max")
-        ref = request.args.get("ref")
+        ref_commande = request.args.get("ref_commande")
+        sort_by = request.args.get('sort_by')
+        sort_order = request.args.get('sort_order','asc')
 
-        # Requête SQL avec jointure sur `clients` pour filtrer par `reference` du client
         query = """
-        SELECT c.id, c.ref_commande, c.date_commande, 
-               c.montant, c.status, c.ref_client
+        SELECT c.ref_commande, c.date_commande, 
+               c.montant, c.status, cl.reference AS client
         FROM commande c
         JOIN clients cl ON c.ref_client = cl.id
         WHERE cl.reference = %s
@@ -263,8 +320,8 @@ def GetOrders(reference):
         params = [reference]
 
         if status:
-            query += " AND c.status = %s"
-            params.append(status)
+            query += " AND c.status like %s"
+            params.append(status + '%')
         
         if date_debut:
             try:
@@ -290,13 +347,20 @@ def GetOrders(reference):
             query += " AND c.montant <= %s"
             params.append(float(montant_max))
 
-        if ref:
+        if ref_commande:
             query += " AND c.ref_commande LIKE %s"
-            params.append(ref + '%')
+            params.append(ref_commande + '%')
+        if sort_by:
+            if sort_order.lower() == 'desc':
+                query += " ORDER BY c.{} DESC".format(sort_by)
+            else:
+                query += " ORDER BY c.{} ASC".format(sort_by)
 
         cursor.execute(query, params)
         orders = cursor.fetchall()
-        column_order = ["id", "ref_commande", "date_commande", "montant", "status", "ref_client"]
+
+        
+        column_order = ["ref_commande", "date_commande", "montant", "status", "client"]
 
         result = []
         for row in orders:
@@ -312,34 +376,70 @@ def GetOrders(reference):
             json_response = json.dumps(result, ensure_ascii=False, indent=4)
             return Response(json_response, mimetype='application/json'), 200
         else:
-            return jsonify({"message": "aucune commande trouvée pour ce client"}), 404
+            return jsonify({"message": "Aucune commande trouvée pour ce client"}), 404
 
-    except Error as e:
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
 
-
+#done
 ################### recuperation d'une commande avec les articles en fonction de la reference de la commande #########
 @app.route('/GetOrderDetails/<ref_commande>', methods=['GET'])
 def GetOrderDetails(ref_commande):
     try:
+
+        # liste des filtres
+        nom_article = request.args.get('nom_article')
+        quantite_min = request.args.get('quantite_min')
+        quantite_max = request.args.get('quantite_max')
+        prix_min = request.args.get('prix_min')
+        prix_max = request.args.get('prix_max')
+        sort_by = request.args.get('sort_by')
+        sort_order = request.args.get('sort_order','asc')
+
         connection = getConnection()
         cursor = connection.cursor()
 
         query = """
-        SELECT c.ref_commande, a.nom AS article_nom, ca.quantite, ca.prix
+        SELECT c.ref_commande, a.nom AS nom_article, ca.quantite, ca.prix
         FROM commande_article ca
         JOIN commande c ON ca.id_commande = c.id
         JOIN article a ON ca.id_article = a.id
         WHERE c.ref_commande = %s
         """
-        cursor.execute(query, [ref_commande])
+        params = [ref_commande]
+        if nom_article:
+            query += " and a.nom like %s"
+            params.append(nom_article +'%')
+        
+        if quantite_min:
+            query += " and ca.quantite >= %s"
+            params.append(quantite_min)
+        if quantite_max:
+            query += " and ca.quantite <= %s"
+            params.append(quantite_max)
+        
+        if prix_min:
+            query += " and ca.prix >= %s"
+            params.append(prix_min)
+        if prix_max:
+            query += " and ca.prix <= %s"
+            params.append(prix_max)
+
+        valid_sort_columns = ["nom_article", "quantite", "prix"]
+        if sort_by in valid_sort_columns:
+            if sort_order.lower() == "desc":
+                query += " order by {} desc".format(sort_by)
+            else:
+                query += " order by {} asc".format(sort_by)
+
+        cursor.execute(query, tuple(params))
+        #cursor.execute(query, [ref_commande])
         order_details = cursor.fetchall()
 
         if not order_details:
             return jsonify({"message": "Aucun article trouvé pour cette commande"}), 404
 
-        column_order = ["ref_commande", "article_nom", "quantite", "prix"]
+        column_order = ["ref_commande", "nom_article", "quantite", "prix"]
         result = []
         for row in order_details:
             order_detail = OrderedDict(zip(column_order, row))
@@ -354,20 +454,65 @@ def GetOrderDetails(ref_commande):
     except Error as e:
         return jsonify({"error": str(e)}), 500
     
+    #done
 ##################### recuperation de toutes les commandes avec leurs articles #####################
-@app.route('/GetAllOrdersItems', methods=['GET'])
-def GetAllOrdersItems():
+@app.route('/GetAllOrdersWithItems', methods=['GET'])
+def GetAllOrdersWithItems():
     try:
         connection = getConnection()
         cursor = connection.cursor()
 
+        ref_commande = request.args.get('ref_commande')
+        nom_article = request.args.get('nom_article')
+        prix_min = request.args.get('prix_min')
+        prix_max = request.args.get('prix_max')
+        quantite_min = request.args.get('quantite_min')
+        quantite_max = request.args.get('quantite_max')
+        sort_by = request.args.get('sort_by')
+        sort_order = request.args.get('sort_order', 'asc')
+
+        
         query = """
-        SELECT c.ref_commande, a.nom AS article_nom, ca.quantite, ca.prix
+        SELECT c.ref_commande, a.nom AS nom_article, ca.quantite, ca.prix
         FROM commande c
         LEFT JOIN commande_article ca ON c.id = ca.id_commande
         LEFT JOIN article a ON ca.id_article = a.id
+        WHERE 1=1
         """
-        cursor.execute(query)
+
+        params = []
+        if ref_commande:
+            query += " AND c.ref_commande like %s"
+            params.append(ref_commande +'%')
+        
+        if nom_article:
+            query += " AND a.nom LIKE %s"
+            params.append(nom_article +'%')
+        
+        if prix_min:
+            query += " AND ca.prix >= %s"
+            params.append(prix_min)
+        
+        if prix_max:
+            query += " AND ca.prix <= %s"
+            params.append(prix_max)
+
+        if quantite_min:
+            query += " and ca.quantite >= %s"
+            params.append(quantite_min)
+        
+        if quantite_max:
+            query += " and ca.quantite <= %s"
+            params.append(quantite_max)
+
+        valid_sort_columns = ["ref_commande","nom_article", "quantite", "prix"]
+        if sort_by in valid_sort_columns:
+            if sort_order.lower() == "desc":
+                query += " order by {} desc".format(sort_by)
+            else:
+                query += " order by {} asc".format(sort_by)
+
+        cursor.execute(query, params)
         orders_data = cursor.fetchall()
 
         if not orders_data:
@@ -416,61 +561,73 @@ def getUsers():
     email = request.args.get("email")
     tel = request.args.get('tel')
     company = request.args.get('company')
+    rwaccess = request.args.get('rwaccess')
+    sort_by = request.args.get('sort_by')
+    sort_order = request.args.get('sort_order','asc')
     
-    #cursor.execute("select nom, prenom, email from utilisateur;")
-    #query = "select nom, prenom, email from utilisateur"
     query = "select * from utilisateur"
     filtres = []
     params = []
     
     if nom:
-        filtres.append("nom = %s")
-        params.append(nom)
+        filtres.append("nom like %s")
+        params.append(nom + '%')
     if prenom:
-        filtres.append("prenom = %s")
-        params.append(prenom)
+        filtres.append("prenom like %s")
+        params.append(prenom + '%')
     if email:
-        filtres.append("email = %s")
-        params.append(email)
+        filtres.append("email like %s")
+        params.append(email + '%')
     if tel:
-        filtres.append('tel= %s')
-        params.append(tel)
+        filtres.append('tel like %s')
+        params.append(tel + '%')
     
     if filtres:
-        query += " where " +" and ".join(filtres)
+        query += " where " + " and ".join(filtres)
+
+    if sort_by:
+        if sort_order.lower() == "desc":
+            query += " order by {} desc".format(sort_by)
+        else:
+            query += " order by {} asc".format(sort_by)
     
     cursor.execute(query, params)
-
 
     rows = cursor.fetchall()
     users = []
     for row in rows:
         access_data = json.loads(row[5])  
-        if company:
-            
-            #company_filtered = [item for item in access_data if item.get('company') == company]
-            company_filtered = [a for a in access_data if company.lower() in a['company'].lower()]
+        if company or rwaccess:
+            company_filtered = []
+            for a in access_data:
+                if company and company.lower() in a['company'].lower():
+                    if rwaccess:
+                        if a['rwaccess'].lower() == rwaccess.lower():
+                            company_filtered.append(a)
+                    else:
+                        company_filtered.append(a)
+                elif rwaccess and not company:
+                    if a['rwaccess'].lower() == rwaccess.lower():
+                        company_filtered.append(a)
             if not company_filtered:
-                continue  
+                continue
         else:
             company_filtered = access_data
   
         user = {
-            'nom' : row[1],
+            'nom': row[1],
             'prenom': row[2],
-            'email' : row[3],
-            'tel' : row[4],
+            'email': row[3],
+            'tel': row[4],
             'access': company_filtered
         }
         users.append(user)
+    
     cursor.close()
     connection.close()
-    #return jsonify(users)
+    
     json_response = json.dumps(users, ensure_ascii=False, indent=4)
     return Response(json_response, mimetype='application/json'), 200
-
-
-
 
 
 if __name__ == "__main__":
