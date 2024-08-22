@@ -52,17 +52,11 @@ def test_connection():
 @app.route('/GetCompanies', methods=['GET'])  
 def getCompanies():
     sort_order = request.args.get('sort_order')
-    nom_entreprise = request.args.get('nom_entreprise')
     connection = test_connection()
     cursor = connection.cursor()
     
     base_query = "SELECT * FROM companies"
     params = []
-    
-    if nom_entreprise:
-        base_query += " WHERE nom LIKE %s"
-        params.append(f"{nom_entreprise}%")
-    
     if sort_order:
         if sort_order.lower() == 'desc':
             base_query += " ORDER BY nom DESC"
@@ -72,26 +66,12 @@ def getCompanies():
     cursor.execute(base_query, tuple(params))
     
     rows = cursor.fetchall()
-    companies = [{'nom': row[1]} for row in rows]
+    companies = [{'id': row[0], 'nom': row[1]} for row in rows]
     
     cursor.close()
     connection.close()
     
     return jsonify(companies)
-
-
-"""@app.route('/GetCompaniesWithId', methods=['GET']) # 2eme cas si on veux les id
-def getCompanies2():
-    connection = test_connection()
-    cursor = connection.cursor()
-    cursor.execute("select * from companies")
-    rows = cursor.fetchall()
-    #companies = [{'nom': row[1]} for row in rows]
-    companies = [{'id': row[0], 'nom': row[1]} for row in rows]
-    cursor.close()
-    connection.close()
-    return jsonify(companies) """
-
 
 
 # done
@@ -109,7 +89,8 @@ def getClients():
     date_debut = request.args.get("date_debut")
     date_fin = request.args.get("date_fin")
 
-    evaluation = request.args.get("evaluation")
+    evaluation_min = request.args.get("evaluation_min")
+    evaluation_max = request.args.get("evaluation_max")
     secteur = request.args.get("secteur")
     ville = request.args.get("ville")
 
@@ -124,8 +105,8 @@ def getClients():
     
     
     base_query = """
-        SELECT c.reference, c.nom, c.status, c.email, c.telephone, c.date_derniere_commande,
-               c.evaluation, c.secteur, c.ville, comp.nom AS nom_entreprise
+        SELECT c.id, c.reference, c.nom, c.status, c.email, c.telephone, c.date_derniere_commande,
+               c.evaluation, c.secteur, c.ville
         FROM clients c
         JOIN companies comp ON c.company_id = comp.id
         WHERE comp.nom = %s
@@ -133,15 +114,15 @@ def getClients():
     params = [nom_entreprise]
     
     if reference:
-        base_query += " AND c.reference like %s"
-        params.append(reference +'%')
+        base_query += " AND c.reference = %s"
+        params.append(reference)
     
     if nom:
         base_query += "AND c.nom LIKE %s"
         params.append(nom +'%')
     if status:
-        base_query += "AND c.status like %s"
-        params.append(status +'%')
+        base_query += "AND c.status = %s"
+        params.append(status)
     if email:
         base_query += "AND c.email = %s"
         params.append(email)
@@ -163,9 +144,12 @@ def getClients():
             params.append(date_obj)
         except ValueError as e:
             return jsonify({"error": "Invalid date format. Use YYYY-MM-DD."}), 400
-    if evaluation:
-        base_query += "AND c.evaluation like %s"
-        params.append(evaluation +'%')
+    if evaluation_min:
+        base_query += "AND c.evaluation >= %s"
+        params.append(evaluation_min)
+    if evaluation_max:
+        base_query += "AND c.evaluation <= %s"
+        params.append(evaluation_max)
     if secteur:
         base_query += "AND c.secteur like %s"
         params.append(secteur +'%')
@@ -186,16 +170,16 @@ def getClients():
     
     for row in rows:
         client = {
-            'reference': row[0],
-            'nom': row[1],
-            'status': row[2],
-            'email': row[3],
-            'telephone': row[4],
-            'date_derniere_commande': row[5].isoformat() if row[5] else None,
-            'evaluation': row[6],
-            'secteur': row[7],
-            'ville': row[8],
-            'nom_entreprise': row[9]
+            'id' : row[0],
+            'reference': row[1],
+            'nom': row[2],
+            'status': row[3],
+            'email': row[4],
+            'telephone': row[5],
+            'date_derniere_commande': row[6].isoformat() if row[6] else None,
+            'evaluation': row[7],
+            'secteur': row[8],
+            'ville': row[9]
         }
         clients.append(client)
         
@@ -220,7 +204,7 @@ def getClientDetail(reference):
         SELECT {', '.join(columns)}
         FROM clients c
         JOIN companies comp ON c.company_id = comp.id
-        WHERE c.reference = %s
+        WHERE c.id = %s
         """
         cursor.execute(query, (reference,))
         client = cursor.fetchone()
@@ -234,49 +218,18 @@ def getClientDetail(reference):
                 client_details["date_derniere_commande"] = client_details["date_derniere_commande"].isoformat()
 
             
-            contact_filters = {
-                "nom": request.args.get('contact_nom'),
-                "prenom": request.args.get('contact_prenom'),
-                "fonction": request.args.get('contact_fonction'),
-                "ville": request.args.get('contact_ville'),
-                "pays": request.args.get('contact_pays'),
-                "code_postal": request.args.get('contact_code_postal'),
-                "email": request.args.get('contact_email'),
-                "fax": request.args.get('contact_fax')
-            }
-            contact_tel = request.args.get('contact_tel')
-            sort_by = request.args.get('sort_by')
-            sort_order = request.args.get('sort_order')
 
             query_contacts = """
-            SELECT c.nom, c.prenom, c.fonction, c.tel1, c.tel2, c.tel3, c.fax, c.email, c.adr_ligne1, c.adr_ligne2, c.code_postal, c.ville, c.pays, c.site_web
+            SELECT c.id, c.nom, c.prenom, c.fonction, c.tel1, c.tel2, c.tel3, c.fax, c.email, c.adr_ligne1, c.adr_ligne2, c.code_postal, c.ville, c.pays
             FROM contact c
             JOIN clients cl ON c.ref_client = cl.id
-            WHERE cl.reference = %s
+            WHERE cl.id = %s
             """
             params = [reference]
 
-            
-            for key, value in contact_filters.items():
-                if value:
-                    query_contacts += " AND c.{} LIKE %s".format(key)
-                    params.append(value +'%')
-
-            if contact_tel:   #contact_tel est le filtre pour les 3 num tel
-                query_contacts += " AND (c.tel1 LIKE %s OR c.tel2 LIKE %s OR c.tel3 LIKE %s)"
-                params.extend([f'{contact_tel}%', f'{contact_tel}%', f'{contact_tel}%'])
-
-            if sort_by:
-                if sort_order.lower() == "desc":
-                    query_contacts += " ORDER BY c.{} DESC".format(sort_by)
-                else:
-                    query_contacts += " ORDER BY c.{} ASC".format(sort_by)
-
-            
-            
             cursor.execute(query_contacts, tuple(params))
             contacts = cursor.fetchall()
-            contacts_list = [OrderedDict(zip(["nom", "prenom", "fonction", "tel1", "tel2", "tel3", "fax", "email", "adr_ligne1", "adr_ligne2", "code_postal", "ville", "pays", "site_web"], contact)) for contact in contacts]
+            contacts_list = [OrderedDict(zip(["id","nom", "prenom", "fonction", "tel1", "tel2", "tel3", "fax", "email", "adr_ligne1", "adr_ligne2", "code_postal", "ville", "pays"], contact)) for contact in contacts]
 
             
             response_data = {
@@ -307,21 +260,24 @@ def GetOrders(reference):
         montant_min = request.args.get("montant_min")
         montant_max = request.args.get("montant_max")
         ref_commande = request.args.get("ref_commande")
+        nom_article = request.args.get("nom_article")
         sort_by = request.args.get('sort_by')
         sort_order = request.args.get('sort_order','asc')
 
         query = """
-        SELECT c.ref_commande, c.date_commande, 
-               c.montant, c.status, cl.reference AS client
-        FROM commande c
-        JOIN clients cl ON c.ref_client = cl.id
-        WHERE cl.reference = %s
+        SELECT c.id, c.ref_commande, c.date_commande, 
+       c.montant, c.status
+            FROM commande c
+            JOIN commande_article ca ON c.id = ca.id_commande
+            JOIN article a ON ca.id_article = a.id
+            join clients cl on c.ref_client = cl.id
+            WHERE cl.id = %s
         """
         params = [reference]
 
         if status:
-            query += " AND c.status like %s"
-            params.append(status + '%')
+            query += " AND c.status = %s"
+            params.append(status)
         
         if date_debut:
             try:
@@ -348,8 +304,11 @@ def GetOrders(reference):
             params.append(float(montant_max))
 
         if ref_commande:
-            query += " AND c.ref_commande LIKE %s"
-            params.append(ref_commande + '%')
+            query += " AND c.ref_commande = %s"
+            params.append(ref_commande)
+        if nom_article:
+            query += " AND a.nom like %s"
+            params.append(nom_article +'%')
         if sort_by:
             if sort_order.lower() == 'desc':
                 query += " ORDER BY c.{} DESC".format(sort_by)
@@ -360,8 +319,7 @@ def GetOrders(reference):
         orders = cursor.fetchall()
 
         
-        column_order = ["ref_commande", "date_commande", "montant", "status", "client"]
-
+        column_order = ["id", "ref_commande", "date_commande", "montant", "status"]
         result = []
         for row in orders:
             order = OrderedDict(zip(column_order, row))
@@ -383,77 +341,52 @@ def GetOrders(reference):
 
 #done
 ################### recuperation d'une commande avec les articles en fonction de la reference de la commande #########
+
 @app.route('/GetOrderDetails/<ref_commande>', methods=['GET'])
 def GetOrderDetails(ref_commande):
     try:
-
-        # liste des filtres
-        nom_article = request.args.get('nom_article')
-        quantite_min = request.args.get('quantite_min')
-        quantite_max = request.args.get('quantite_max')
-        prix_min = request.args.get('prix_min')
-        prix_max = request.args.get('prix_max')
-        sort_by = request.args.get('sort_by')
-        sort_order = request.args.get('sort_order','asc')
-
         connection = getConnection()
         cursor = connection.cursor()
-
-        query = """
-        SELECT c.ref_commande, a.nom AS nom_article, ca.quantite, ca.prix
-        FROM commande_article ca
-        JOIN commande c ON ca.id_commande = c.id
-        JOIN article a ON ca.id_article = a.id
-        WHERE c.ref_commande = %s
+        columns = ["c.ref_commande","c.date_commande","c.montant","c.status"]
+        query = f"""
+        select {', '.join(columns)}
+        from commande c
+        where c.id = %s
         """
-        params = [ref_commande]
-        if nom_article:
-            query += " and a.nom like %s"
-            params.append(nom_article +'%')
-        
-        if quantite_min:
-            query += " and ca.quantite >= %s"
-            params.append(quantite_min)
-        if quantite_max:
-            query += " and ca.quantite <= %s"
-            params.append(quantite_max)
-        
-        if prix_min:
-            query += " and ca.prix >= %s"
-            params.append(prix_min)
-        if prix_max:
-            query += " and ca.prix <= %s"
-            params.append(prix_max)
+        cursor.execute(query, (ref_commande,))
+        order = cursor.fetchone()
+        if order:
+            order_columns = [col.split(' AS ')[-1] if ' AS ' in col else col.split('.')[-1] for col in columns]
+            order_details = OrderedDict(zip(order_columns, order))
+            if order_details["date_commande"]:
+                order_details["date_commande"] = order_details["date_commande"].isoformat()
+            
+            query_article = """
+            select  a.ref_article, a.nom, ca.quantite, ca.prix
+            from article a
+            join commande_article ca on ca.id_article = a.id
+            where ca.id_commande = %s
+            """
+            params = [ref_commande]
+            cursor.execute(query_article, tuple(params))
+            articles = cursor.fetchall()
+            articles_list = [OrderedDict(zip(["ref_article","nom","quantite","prix"], article)) for article in articles]
 
-        valid_sort_columns = ["nom_article", "quantite", "prix"]
-        if sort_by in valid_sort_columns:
-            if sort_order.lower() == "desc":
-                query += " order by {} desc".format(sort_by)
-            else:
-                query += " order by {} asc".format(sort_by)
+            response_data = {
+                "order_details": order_details,
+                "articles": articles_list
+            }
+            json_response = json.dumps(response_data, ensure_ascii=False, indent=4)
+            return Response(json_response, mimetype='application/json'), 200
+        else:
+            return jsonify({"message": "commande non trouvé"}), 404
 
-        cursor.execute(query, tuple(params))
-        #cursor.execute(query, [ref_commande])
-        order_details = cursor.fetchall()
-
-        if not order_details:
-            return jsonify({"message": "Aucun article trouvé pour cette commande"}), 404
-
-        column_order = ["ref_commande", "nom_article", "quantite", "prix"]
-        result = []
-        for row in order_details:
-            order_detail = OrderedDict(zip(column_order, row))
-            result.append(order_detail)
-
+    except Exception as e:
+        return jsonify({"message": str(e)}), 500
+    finally:
         cursor.close()
         connection.close()
 
-        json_response = json.dumps(result, ensure_ascii=False, indent=4)
-        return Response(json_response, mimetype='application/json'), 200
-
-    except Error as e:
-        return jsonify({"error": str(e)}), 500
-    
     #done
 ##################### recuperation de toutes les commandes avec leurs articles #####################
 @app.route('/GetAllOrdersWithItems', methods=['GET'])
@@ -549,7 +482,7 @@ def GetAllOrdersWithItems():
 
 
 
-
+#checked
 @app.route('/GetUsers', methods=['GET'])
 def getUsers():
     connection = getConnection()
