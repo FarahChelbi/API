@@ -362,7 +362,7 @@ def GetOrderDetails(ref_commande):
                 order_details["date_commande"] = order_details["date_commande"].isoformat()
             
             query_article = """
-            select  a.ref_article, a.nom, ca.quantite, ca.prix
+            select a.id,  a.ref_article, a.nom, ca.quantite, ca.prix
             from article a
             join commande_article ca on ca.id_article = a.id
             where ca.id_commande = %s
@@ -370,7 +370,7 @@ def GetOrderDetails(ref_commande):
             params = [ref_commande]
             cursor.execute(query_article, tuple(params))
             articles = cursor.fetchall()
-            articles_list = [OrderedDict(zip(["ref_article","nom","quantite","prix"], article)) for article in articles]
+            articles_list = [OrderedDict(zip(["id","ref_article","nom","quantite","prix"], article)) for article in articles]
 
             response_data = {
                 "order_details": order_details,
@@ -389,7 +389,8 @@ def GetOrderDetails(ref_commande):
 
     #done
 ##################### recuperation de toutes les commandes avec leurs articles #####################
-@app.route('/GetAllOrdersWithItems', methods=['GET'])
+
+@app.route('/GetAllOrdersWithItems', methods=['GET'])  # à vérifier si je vais garder
 def GetAllOrdersWithItems():
     try:
         connection = getConnection()
@@ -483,14 +484,16 @@ def GetAllOrdersWithItems():
 
 
 #checked
+
 @app.route('/GetUsers', methods=['GET'])
 def getUsers():
     connection = getConnection()
     cursor = connection.cursor()
 
-    # pour les filtres
+    # Pour les filtres
     nom = request.args.get("nom")
     prenom = request.args.get("prenom")
+    type_user = request.args.get("type_user")
     email = request.args.get("email")
     tel = request.args.get('tel')
     company = request.args.get('company')
@@ -508,9 +511,13 @@ def getUsers():
     if prenom:
         filtres.append("prenom like %s")
         params.append(prenom + '%')
+
+    if type_user:
+        filtres.append("type_user = %s")
+        params.append(type_user)
     if email:
-        filtres.append("email like %s")
-        params.append(email + '%')
+        filtres.append("email = %s")
+        params.append(email)
     if tel:
         filtres.append('tel like %s')
         params.append(tel + '%')
@@ -529,31 +536,29 @@ def getUsers():
     rows = cursor.fetchall()
     users = []
     for row in rows:
-        access_data = json.loads(row[5])  
-        if company or rwaccess:
-            company_filtered = []
-            for a in access_data:
-                if company and company.lower() in a['company'].lower():
-                    if rwaccess:
-                        if a['rwaccess'].lower() == rwaccess.lower():
-                            company_filtered.append(a)
-                    else:
-                        company_filtered.append(a)
-                elif rwaccess and not company:
-                    if a['rwaccess'].lower() == rwaccess.lower():
-                        company_filtered.append(a)
-            if not company_filtered:
-                continue
-        else:
-            company_filtered = access_data
-  
+        access_data = json.loads(row[6])
         user = {
+            'id': row[0],
             'nom': row[1],
             'prenom': row[2],
-            'email': row[3],
-            'tel': row[4],
-            'access': company_filtered
+            'type user': row[3],
+            'email': row[4],
+            'tel': row[5],
+            'access': access_data
         }
+        
+        if company or rwaccess:
+            user_found = False
+            for a in access_data:
+                if company and company.lower() in a['company'].lower():
+                    user_found = True
+                    break
+                if rwaccess and rwaccess.lower() == a['rwaccess'].lower():
+                    user_found = True
+                    break
+            if not user_found:
+                continue
+        
         users.append(user)
     
     cursor.close()
@@ -561,6 +566,151 @@ def getUsers():
     
     json_response = json.dumps(users, ensure_ascii=False, indent=4)
     return Response(json_response, mimetype='application/json'), 200
+
+
+@app.route('/AddUser', methods=['POST'])
+def addUser():
+    data = request.json  
+    
+    
+    nom = data.get('nom')
+    prenom = data.get('prenom')
+    type_user = data.get('type_user').lower() if data.get('type_user') else None
+    email = data.get('email')
+    tel = data.get('tel')
+    access = data.get('access')  
+    
+    if not nom or not prenom or not type_user or not email or not tel or not access:
+        return jsonify({"error": "Tous les champs sont requis"}), 400
+
+    
+    if type_user not in ["user", "admin", "super admin"]:
+        return jsonify({"error": "type_user doit être 'user', 'admin', ou 'super admin'"}), 400
+
+    
+    access_json = json.dumps(access)
+    
+    
+    connection = getConnection()
+    cursor = connection.cursor()
+    
+    # Préparer la requête d'insertion
+    query = """
+    INSERT INTO utilisateur (nom, prenom, type_user, email, tel, access)
+    VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    params = (nom, prenom, type_user, email, tel, access_json)
+    
+    try:
+        cursor.execute(query, params)
+        connection.commit()
+        new_user_id = cursor.lastrowid
+    except Exception as e:
+        connection.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+    
+    # Retourner la réponse avec l'ID du nouvel utilisateur
+    return jsonify({"message": "Utilisateur ajouté avec succès", "user_id": new_user_id}), 201
+
+
+@app.route('/UpdateUser/<int:user_id>', methods=['PUT'])
+def updateUser(user_id):
+    data = request.json  # On suppose que les données sont envoyées en format JSON
+    
+    # Récupérer les données de la requête
+    nom = data.get('nom')
+    prenom = data.get('prenom')
+    type_user = data.get('type_user').lower() if data.get('type_user') else None
+    email = data.get('email')
+    tel = data.get('tel')
+    access = data.get('access')  # Ce champ doit être un JSON valide
+    
+    # Connexion à la base de données
+    connection = getConnection()
+    cursor = connection.cursor()
+    
+    # Vérifier si l'utilisateur existe
+    cursor.execute("SELECT * FROM utilisateur WHERE id = %s", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        return jsonify({"error": "Utilisateur non trouvé"}), 404
+
+    # Construction de la requête de mise à jour
+    update_fields = []
+    params = []
+
+    if nom:
+        update_fields.append("nom = %s")
+        params.append(nom)
+    if prenom:
+        update_fields.append("prenom = %s")
+        params.append(prenom)
+    if type_user:
+        if type_user not in ["user", "admin", "super admin"]:
+            return jsonify({"error": "type_user doit être 'user', 'admin', ou 'super admin'"}), 400
+        update_fields.append("type_user = %s")
+        params.append(type_user)
+    if email:
+        update_fields.append("email = %s")
+        params.append(email)
+    if tel:
+        update_fields.append("tel = %s")
+        params.append(tel)
+    if access:
+        access_json = json.dumps(access)
+        update_fields.append("access = %s")
+        params.append(access_json)
+    
+    if not update_fields:
+        return jsonify({"error": "Aucune donnée à mettre à jour"}), 400
+
+    query = "UPDATE utilisateur SET " + ", ".join(update_fields) + " WHERE id = %s"
+    params.append(user_id)
+    
+    try:
+        cursor.execute(query, params)
+        connection.commit()
+    except Exception as e:
+        connection.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+    
+    return jsonify({"message": "Utilisateur mis à jour avec succès"}), 200
+
+
+
+@app.route('/DeleteUser/<int:user_id>', methods=['DELETE'])
+def deleteUser(user_id):
+    # Connexion à la base de données
+    connection = getConnection()
+    cursor = connection.cursor()
+
+    # Vérifier si l'utilisateur existe avant de le supprimer
+    cursor.execute("SELECT * FROM utilisateur WHERE id = %s", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        return jsonify({"error": "Utilisateur non trouvé"}), 404
+
+    # Préparer la requête de suppression
+    query = "DELETE FROM utilisateur WHERE id = %s"
+    
+    try:
+        cursor.execute(query, (user_id,))
+        connection.commit()
+    except Exception as e:
+        connection.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        connection.close()
+    
+    return jsonify({"message": "Utilisateur supprimé avec succès"}), 200
+
 
 
 if __name__ == "__main__":
