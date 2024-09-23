@@ -300,7 +300,10 @@ def getClients(company_id):
         ville = request.args.get('ville')
         contact_nom = request.args.get('contact_nom')
         sort_by = request.args.get('sort_by')
-        sort_order = request.args.get('sort_order','asc')
+        sort_order = request.args.get('sort_order', 'asc')
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 5, type=int)
+        
         connexion = getConnexion()
         cursor = connexion.cursor()
 
@@ -316,55 +319,59 @@ def getClients(company_id):
         
         params = [company_id]
 
+        # Ajout des filtres
         if reference:
-            query += " and c.reference = %s"
+            query += " AND c.reference = %s"
             params.append(reference)
         if raison_sociale:
-            query += " and c.raison_sociale like %s"
-            params.append(raison_sociale+'%')
+            query += " AND c.raison_sociale LIKE %s"
+            params.append(raison_sociale + '%')
         if statut:
-            query += " and c.statut = %s"
+            query += " AND c.statut = %s"
             params.append(statut)
         if email:
-            query += " and c.email = %s"
+            query += " AND c.email = %s"
             params.append(email)
         if telephone:
-            query += " and (c.telephone = %s or c.mobile = %s or ct.telephone = %s or ct.mobile = %s)"
+            query += " AND (c.telephone = %s OR c.mobile = %s OR ct.telephone = %s OR ct.mobile = %s)"
             params.extend([telephone, telephone, telephone, telephone])
         if date_min:
             try:
                 date_obj = datetime.strptime(date_min, '%d/%m/%Y').date()
                 query += " AND c.date_derniere_commande >= %s"
                 params.append(date_obj)
-            except ValueError as e:
+            except ValueError:
                 return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
         if date_max:
             try:
                 date_obj = datetime.strptime(date_max, '%d/%m/%Y').date()
                 query += " AND c.date_derniere_commande <= %s"
                 params.append(date_obj)
-            except ValueError as e:
+            except ValueError:
                 return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
         if evaluation_min:
-            query += " and c.evaluation >= %s"
+            query += " AND c.evaluation >= %s"
             params.append(evaluation_min)
         if evaluation_max:
-            query += " and c.evaluation <= %s"
+            query += " AND c.evaluation <= %s"
             params.append(evaluation_max)
         if ville:
-            query += " and c.ville like %s"
-            params.append(ville+'%')
+            query += " AND c.ville LIKE %s"
+            params.append(ville + '%')
         if secteur:
-            query += " and s.nom = %s"
+            query += " AND s.nom = %s"
             params.append(secteur)
         if contact_nom:
-            query += " and ct.nom like %s"  
-            params.append(contact_nom+'%')
+            query += " AND ct.nom LIKE %s"  
+            params.append(contact_nom + '%')
         if sort_by:
-            if sort_order.lower() == 'desc':
-                query += " ORDER BY c.{} DESC".format(sort_by)
-            else:
-                query += " ORDER BY c.{} ASC".format(sort_by)
+            query += " ORDER BY c.{} {}".format(sort_by, 'DESC' if sort_order.lower() == 'desc' else 'ASC')
+
+        # Calcul de l'offset pour la pagination
+        offset = (page - 1) * per_page
+        query += " LIMIT %s OFFSET %s"
+        params.extend([per_page, offset])
+
         cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
 
@@ -377,7 +384,7 @@ def getClients(company_id):
                 'statut': row[3],
                 'email': row[4],
                 'telephone': row[5],
-                'date_derniere_commande':row[6].strftime('%d/%m/%Y') if row[6] else None,
+                'date_derniere_commande': row[6].strftime('%d/%m/%Y') if row[6] else None,
                 'evaluation': row[7],
                 'ville': row[8],
                 'secteur': row[9]
@@ -386,24 +393,156 @@ def getClients(company_id):
 
         cursor.close()
 
-        return jsonify(clients)
+        return jsonify({
+            'page': page,
+            'per_page': per_page,
+            'total_clients': len(clients),
+            'clients': clients
+        })
 
     except Exception as e:
-        # Gestion des erreurs
         return Response(json.dumps({'error': str(e)}), mimetype='application/json'), 500
 
-
-app.route('/GetClientDetails/<int:client_id>', methods=['GET'])
-def getClientDetails(client_id):
+@app.route('/GetClientDetails/<int:company_id>/<int:client_id>', methods=['GET'])
+def getClientDetails(company_id, client_id):
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
+        query = """
+        SELECT c.reference, c.raison_sociale, c.statut, c.email, c.telephone, c.mobile, 
+               c.site_web, c.date_derniere_commande, c.evaluation, c.adresse, c.ville, 
+               c.info_personnelles, c.preference, c.decision, c.raison, c.visite, 
+               c.position_fiscale, c.n_tva, s.nom as secteurs
+        FROM clients c
+        JOIN secteur s ON c.secteur_id = s.id
+        JOIN companies comp ON c.company_id = comp.id
+        WHERE c.id = %s AND comp.id = %s
+        """
+        cursor.execute(query, (client_id, company_id))
+        row = cursor.fetchone()
+        if not row:
+            return jsonify({"error": "client not found"}), 404
 
-        
+        if row:
+            client = {
+                'reference': row[0],
+                'raison_sociale': row[1],
+                'statut': row[2],
+                'email': row[3],
+                'telephone': row[4],
+                'mobile': row[5],
+                'site_web': row[6],
+                'date_derniere_commande': row[7].strftime('%d/%m/%Y') if row[7] else None,
+                'evaluation': row[8],
+                'adresse': row[9],
+                'ville': row[10],
+                'info_personnelles': row[11],
+                'preference': row[12],
+                'decision': row[13],
+                'raison': row[14],
+                'visite': row[15],
+                'position_fiscale': row[16],
+                'n_tva': row[17],
+                'secteurs': row[18]
+            }
+
+            query_contact = """
+            select id, nom, prenom , telephone, mobile, email, poste, notes from contacts
+            where client_id = %s
+            """
+            cursor.execute(query_contact, (client_id,))
+            contacts_rows = cursor.fetchall()
+            contacts = []
+            for row in contacts_rows:
+                contact = {
+                'id': row[0],
+                'nom': row[1],
+                'prenom': row[2],
+                'telephone': row[3],
+                'mobile': row[4],
+                'email': row[5],
+                'poste': row[6],
+                'notes': row[7]
+                }
+                contacts.append(contact)
+            client['contacts'] = contacts
+            json_response = json.dumps(client, ensure_ascii=False, indent=4)
+            return Response(json_response, mimetype='application/json'), 200
     except Exception as e:
         return jsonify({"message": str(e)}), 500
+
     finally:
         cursor.close()
-        connexion.close()  
+        connexion.close()
+
+@app.route('/UpdateClient/<int:client_id>', methods=['PUT'])
+def updateClient(client_id):
+    try:
+        data = request.json
+        non_modifiable_fields = ['adresse', 'n_tva', 'position_fiscale', 'telephone', 'mobile', 'email', 'site_web']
+        
+        for field in non_modifiable_fields:
+            if field in data:
+                return jsonify({"error": f"Le champ '{field}' ne peut pas être modifié."}), 400
+
+        # Préparation des mises à jour
+        updates = []
+        params = []
+
+        # Ajoutez les champs modifiables
+        if 'reference' in data:
+            updates.append("reference = %s")
+            params.append(data['reference'])
+        if 'raison_sociale' in data:
+            updates.append("raison_sociale = %s")
+            params.append(data['raison_sociale'])
+        if 'statut' in data:
+            updates.append("statut = %s")
+            params.append(data['statut'])
+        if 'date_derniere_commande' in data:
+            updates.append("date_derniere_commande = %s")
+            params.append(data['date_derniere_commande'])
+        if 'evaluation' in data:
+            updates.append("evaluation = %s")
+            params.append(data['evaluation'])
+        if 'info_personnelles' in data:
+            updates.append("info_personnelles = %s")
+            params.append(data['info_personnelles'])
+        if 'preference' in data:
+            updates.append("preference = %s")
+            params.append(data['preference'])
+        if 'decision' in data:
+            updates.append("decision = %s")
+            params.append(data['decision'])
+        if 'raison' in data:
+            updates.append("raison = %s")
+            params.append(data['raison'])
+        if 'visite' in data:
+            updates.append("visite = %s")
+            params.append(data['visite'])
+
+        if not updates:
+            return jsonify({"error": "Aucun champ modifiable fourni."}), 400
+
+        # Requête de mise à jour
+        query = f"""
+        UPDATE clients SET 
+            {', '.join(updates)}
+        WHERE id = %s
+        """
+        
+        params.append(client_id)
+
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+        cursor.execute(query, params)
+        connexion.commit()
+        cursor.close()
+        
+        return jsonify({"message": "Client updated successfully."}), 200
+
+    except Exception as e:
+        return Response(json.dumps({'error': str(e)}), mimetype='application/json'), 500
+
 if __name__ == "__main__":
     app.run(debug=True)
