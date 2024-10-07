@@ -1386,5 +1386,60 @@ def getProductDetails(product_id):
         cursor.close()
         connexion.close()
 
+
+@app.route('/UpdateProduct/<int:product_id>', methods=['PUT'])
+def updateProduct(product_id):
+    try:
+        data = request.get_json()
+
+        note_commentaire = data.get('note_commentaire')
+        seuil = data.get('seuil')
+        date_expiration = data.get('date_expiration')
+        variante_id = data.get('variante_id')  
+
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+
+        if note_commentaire is not None:
+            query_produit = """
+            UPDATE produit
+            SET note_commentaire = %s
+            WHERE id = %s
+            """
+            cursor.execute(query_produit, (note_commentaire, product_id))
+
+        if variante_id is not None:
+            if seuil is not None:
+                query_seuil = """
+                UPDATE variante_produit
+                SET seuil = %s
+                WHERE produit_id = %s AND variante_id = %s
+                """
+                cursor.execute(query_seuil, (seuil, product_id, variante_id))
+
+            if date_expiration is not None:
+                try:
+                    date_obj = datetime.strptime(date_expiration, '%d/%m/%Y').date()
+                except ValueError:
+                    return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+
+                query_date = """
+                UPDATE variante_produit
+                SET date_expiration = %s
+                WHERE produit_id = %s AND variante_id = %s
+                """
+                cursor.execute(query_date, (date_obj, product_id, variante_id))
+
+        connexion.commit()
+
+        return jsonify({"message": "Product updated successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        connexion.close()
+
 if __name__ == "__main__":
     app.run(debug=True)
