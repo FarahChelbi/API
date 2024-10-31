@@ -22,25 +22,42 @@ def test_connexion():
        print("Connected to MySQL database") 
     return connexion
 
-@app.route('/GetCompanies', methods=['GET'])
-def getCompanies():
-    sort_order = request.args.get('sort_order')
+@app.route('/GetUser/<email>', methods=['POST'])
+def getUser(email):
+    if not email:
+        return jsonify({"error": "Email manquant dans l'URL"}), 400
     
-    connexion = test_connexion()
+    connexion = getConnexion()
     cursor = connexion.cursor()
-    cursor.execute("SELECT valeur FROM config WHERE cle = 'selected_company'")
-    selected_company_row = cursor.fetchone()
-    selected_company = int(selected_company_row[0]) if selected_company_row else None
+    cursor.execute("SELECT nom, prenom, access FROM utilisateur WHERE email = %s", (email,))
+    user_row = cursor.fetchone()
 
-    base_query = "SELECT * FROM companies"
-    params = []
-    if sort_order:
-        if sort_order.lower() == 'desc':
-            base_query += " ORDER BY nom DESC"
-        elif sort_order.lower() == 'asc':
-            base_query += " ORDER BY nom ASC"
+    if not user_row:
+        cursor.close()
+        connexion.close()
+        return jsonify({"error": "Utilisateur non trouvé"}), 404
 
-    cursor.execute(base_query, tuple(params))
+    nom = user_row[0]
+    prenom = user_row[1]
+    
+    try:
+        access_data = json.loads(user_row[2])  
+    except json.JSONDecodeError:
+        cursor.close()
+        connexion.close()
+        return jsonify({"error": "Données d'accès invalides"}), 400
+
+    active_companies = [entry['company'] for entry in access_data if entry['status'].lower() == 'actif']
+
+    if not active_companies:
+        cursor.close()
+        connexion.close()
+        return jsonify({"message": "Aucune entreprise active"}), 200
+
+    placeholders = ','.join(['%s'] * len(active_companies))
+    base_query = f"SELECT id, nom FROM companies WHERE nom IN ({placeholders})"
+
+    cursor.execute(base_query, tuple(active_companies))
     rows = cursor.fetchall()
 
     companies = []
@@ -53,22 +70,24 @@ def getCompanies():
 
     cursor.close()
     connexion.close()
+
     return jsonify({
-        'data': {
-            'selectedCompany': selected_company,
-            'companies': companies
+        'user': {
+            'nom': nom,
+            'prenom': prenom,
+            'entreprises_actives': companies
         }
-    })
+    }), 200
 
-
-@app.route('/GetUsers/<int:company_id>', methods=["GET"]) # tri : nom prenom et email
+@app.route('/GetUsers/<int:company_id>', methods=["POST"])  
 def getUsers(company_id):
-    nom = request.args.get("nom")
-    prenom = request.args.get("prenom")
-    email = request.args.get("email")
-    status = request.args.get("status")
-    sort_by = request.args.get('sort_by')
-    sort_order = request.args.get('sort_order', 'asc')
+    data = request.get_json()  
+    nom = data.get("nom")
+    prenom = data.get("prenom")
+    email = data.get("email")
+    status = data.get("status")
+    sort_by = data.get('sort_by')
+    sort_order = data.get('sort_order', 'asc')
 
     connexion = getConnexion()
     cursor = connexion.cursor()
@@ -82,6 +101,7 @@ def getUsers(company_id):
     """
     filtres = []
     params = [company_id]
+
     if nom:
         filtres.append("u.nom LIKE %s")
         params.append(nom + '%')
@@ -91,42 +111,36 @@ def getUsers(company_id):
     if email:
         filtres.append("u.email = %s")
         params.append(email)
+
     if filtres:
         query += " AND " + " AND ".join(filtres)
+
     if sort_by:
         if sort_order.lower() == "desc":
             query += f" ORDER BY u.{sort_by} DESC"
         else:
             query += f" ORDER BY u.{sort_by} ASC"
+
     print(query)
     print(params)
+
     cursor.execute(query, tuple(params))
     rows = cursor.fetchall()
+
     users = []
     for row in rows:
         access_data = json.loads(row[4])  
         company_name = row[-1]  
-        
+
         user = {
             'id': row[0],
             'nom': row[1],
             'prenom': row[2],
-            #'type_user': row[3],
-            'email': row[3],
-            #'access': access_data
+            'email': row[3]
         }
-        
-        """user_found = False
-        for a in access_data:
-            if a["company"] == company_name:  
-                if not status or (status.lower() in a["status"].lower()):
-                    user_found = True
-                    break
-        
-        if user_found:
-            users.append(user)"""
+
         filtered_access = next((a for a in access_data if a["company"] == company_name), None)
-        
+
         if filtered_access:
             if not status or (status.lower() in filtered_access["status"].lower()):
                 user['rwaccess'] = filtered_access["rwaccess"]
@@ -221,18 +235,28 @@ def updateUser(user_id):
     
     return jsonify({"message": "Utilisateur mis à jour avec succès"}), 200
 
-@app.route('/DeleteUser/<int:user_id>', methods=['DELETE'])
-def deleteUser(user_id):
+@app.route('/DeleteUsers', methods=['DELETE'])
+def deleteUsers():
+    user_ids = request.json.get('user_ids', [])
+    
+    if not user_ids:
+        return jsonify({"error": "Aucun ID d'utilisateur fourni"}), 400
     connexion = getConnexion()
     cursor = connexion.cursor()
-    cursor.execute("SELECT * FROM utilisateur WHERE id = %s", (user_id,))
-    user = cursor.fetchone()
-    if not user:
-        return jsonify({"error": "Utilisateur non trouvé"}), 404
-    query = "DELETE FROM utilisateur WHERE id = %s"
+
+    format_strings = ','.join(['%s'] * len(user_ids))
+    cursor.execute(f"SELECT id FROM utilisateur WHERE id IN ({format_strings})", tuple(user_ids))
+    found_users = cursor.fetchall()
+
+    found_ids = [user[0] for user in found_users]
     
+    if len(found_ids) != len(user_ids):
+        missing_ids = set(user_ids) - set(found_ids)
+        return jsonify({"error": f"Les utilisateurs avec les IDs suivants n'existent pas : {list(missing_ids)}"}), 404
+
+    query = f"DELETE FROM utilisateur WHERE id IN ({format_strings})"
     try:
-        cursor.execute(query, (user_id,))
+        cursor.execute(query, tuple(user_ids))
         connexion.commit()
     except Exception as e:
         connexion.rollback()
@@ -241,86 +265,71 @@ def deleteUser(user_id):
         cursor.close()
         connexion.close()
     
-    return jsonify({"message": "Utilisateur supprimé avec succès"}), 200
+    return jsonify({"message": f"Utilisateurs supprimés avec succès : {user_ids}"}), 200
 
-@app.route('/GetUserDetails/<int:user_id>', methods=["GET"])
-def getUserDetails(user_id):
+@app.route('/GetUserDetails', methods=["POST"])
+def getUserDetails():
+    data = request.get_json()  
+    user_id = data.get("user_id")  
+
+    if not user_id:
+        return jsonify({"error": "L'ID de l'utilisateur est manquant"}), 400
+    
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
+
         query = "SELECT id, nom, prenom, email, access FROM utilisateur WHERE id = %s"
         cursor.execute(query, (user_id,))
         user = cursor.fetchone()
+
         if user:
             user_details = {
                 "id": user[0],
                 "nom": user[1],
                 "prenom": user[2],
                 "email": user[3],
-                "access": json.loads(user[4]) 
+                "access": json.loads(user[4])  
             }
             json_response = json.dumps(user_details, ensure_ascii=False, indent=4)
             return Response(json_response, mimetype='application/json'), 200
         else:
             return jsonify({"message": "Utilisateur non trouvé"}), 404
-    
+
     except Exception as e:
         return jsonify({"message": str(e)}), 500
+    
     finally:
         cursor.close()
         connexion.close()
 
-
 ############## API Clients #############
 
 
-@app.route('/GetSecteurs', methods=['GET'])  
-def getSecteurs():
-    sort_order = request.args.get('sort_order')
-    connexion = test_connexion()
-    cursor = connexion.cursor()
-    
-    base_query = "SELECT * FROM secteur"
-    params = []
-    if sort_order:
-        if sort_order.lower() == 'desc':
-            base_query += " ORDER BY nom DESC"
-        elif sort_order.lower() == 'asc':
-            base_query += " ORDER BY nom ASC"
-    
-    cursor.execute(base_query, tuple(params))
-    
-    rows = cursor.fetchall()
-    secteurs = [{'id': row[0], 'nom': row[1]} for row in rows]
-    
-    cursor.close()
-    connexion.close()
-    return jsonify(secteurs)
 
-
-@app.route('/GetClients/<int:company_id>', methods=['GET'])
+@app.route('/GetClients/<int:company_id>', methods=['POST'])
 def getClients(company_id):
     try:
-        # Récupérer les paramètres de requête
-        reference = request.args.get('reference')
-        raison_sociale = request.args.get('raison_sociale')
-        statut = request.args.get('statut')
-        email = request.args.get('email')
-        telephone = request.args.get('telephone')
-        date_min = request.args.get("date_min")
-        date_max = request.args.get('date_max')
-        evaluation_min = request.args.get('evaluation_min')
-        evaluation_max = request.args.get('evaluation_max')
-        secteur = request.args.get('secteur')
-        ville = request.args.get('ville')
-        contact_nom = request.args.get('contact_nom')
-        contact_prenom = request.args.get('contact_prenom')
-        sort_by = request.args.get('sort_by')
-        sort_order = request.args.get('sort_order', 'asc')
-        page = request.args.get('page', 1, type=int)
-        per_page = request.args.get('per_page', 10, type=int)
+        data = request.get_json()
+        reference = data.get('reference')
+        raison_sociale = data.get('raison_sociale')
+        statut = data.get('statut')
+        email = data.get('email')
+        telephone = data.get('telephone')
+        date_min = data.get("date_min")
+        date_max = data.get('date_max')
+        evaluation_min = data.get('evaluation_min')
+        evaluation_max = data.get('evaluation_max')
+        secteur = data.get('secteur')
+        ville = data.get('ville')
+        contact_nom = data.get('contact_nom')
+        contact_prenom = data.get('contact_prenom')
+        sort_by = data.get('sort_by')
+        sort_order = data.get('sort_order', 'asc')
+        page = data.get('page', 1)
+        per_page = data.get('per_page', 10)
 
-        connexion = getConnexion()  # Fonction à définir pour obtenir la connexion
+        connexion = getConnexion()  
         cursor = connexion.cursor()
 
         query = """
@@ -337,7 +346,6 @@ def getClients(company_id):
 
         params = [company_id]
 
-        # Ajout des filtres
         if reference:
             query += " AND c.reference = %s"
             params.append(reference)
@@ -345,7 +353,7 @@ def getClients(company_id):
             query += " AND c.raison_sociale LIKE %s"
             params.append(raison_sociale + '%')
         if statut:
-            query += " AND c.statut like %s"
+            query += " AND c.statut LIKE %s"
             params.append(statut + '%')
         if email:
             query += " AND c.email = %s"
@@ -392,17 +400,13 @@ def getClients(company_id):
             query += " AND ct.prenom LIKE %s"
             params.append(contact_prenom + '%')
 
-        # Ajout de GROUP BY pour chaque client
         query += " GROUP BY c.id"
 
-        # Liste sécurisée des colonnes pour `sort_by`, basée sur les champs filtrés
         valid_columns = ['reference', 'raison_sociale', 'statut', 'email', 'telephone', 'date_derniere_commande', 'evaluation', 'ville']
 
-        # Vérification si `sort_by` est valide
         if sort_by and sort_by in valid_columns:
             query += " ORDER BY c." + sort_by + " " + ('DESC' if sort_order.lower() == 'desc' else 'ASC')
 
-        # Calcul de l'offset pour la pagination
         offset = (page - 1) * per_page
         query += " LIMIT %s OFFSET %s"
         params.extend([per_page, offset])
@@ -425,7 +429,7 @@ def getClients(company_id):
                 'date_derniere_commande': row[6].strftime('%d/%m/%Y') if row[6] else None,
                 'evaluation': row[7],
                 'ville': row[8],
-                'secteurs': row[9].split(', ') if row[9] else []  # Convertir la chaîne en liste
+                'secteurs': row[9].split(', ') if row[9] else []  
             }
             clients.append(client)
 
@@ -442,13 +446,19 @@ def getClients(company_id):
         return Response(json.dumps({'error': str(e)}), mimetype='application/json'), 500
 
 
-@app.route('/GetClientDetails/<int:company_id>/<int:client_id>', methods=['GET'])
-def getClientDetails(company_id, client_id):
+@app.route('/GetClientDetails', methods=['POST'])
+def getClientDetails():
     try:
+        data = request.get_json()
+        company_id = data.get('company_id')
+        client_id = data.get('client_id')
+
+        if not company_id or not client_id:
+            return jsonify({"error": "company_id and client_id are required"}), 400
+        
         connexion = getConnexion()
         cursor = connexion.cursor()
         
-        # Récupérer les détails du client
         query = """
         SELECT c.reference, c.raison_sociale, c.statut, c.email, c.telephone, c.mobile, 
                c.site_web, c.date_derniere_commande, c.evaluation, c.adresse, c.ville, 
@@ -479,7 +489,6 @@ def getClientDetails(company_id, client_id):
             'preference': row[12],
             'decision': row[13],
             'raison': row[14],
-            
             'position_fiscale': row[15],
             'n_tva': row[16],
             'nature_paiement': row[17],
@@ -487,7 +496,6 @@ def getClientDetails(company_id, client_id):
             'methode_livraison' : row[19]
         }
 
-        # Récupérer les secteurs du client
         query_secteurs = """
         SELECT s.nom
         FROM client_secteur cs
@@ -496,10 +504,9 @@ def getClientDetails(company_id, client_id):
         """
         cursor.execute(query_secteurs, (client_id,))
         secteurs_rows = cursor.fetchall()
-        secteurs = [row[0] for row in secteurs_rows]  # Liste des secteurs
+        secteurs = [row[0] for row in secteurs_rows]  
         client['secteurs'] = secteurs
 
-        # Récupérer les contacts associés au client
         query_contact = """
         SELECT id, nom, prenom, telephone, mobile, email, poste, notes 
         FROM contacts
@@ -537,20 +544,16 @@ def updateClient(client_id):
     try:
         data = request.json
         
-        # Définir les champs modifiables et les valeurs autorisées pour le statut
         modifiable_fields = ['statut', 'evaluation', 'raison', 'info_personnelles', 'preference', 'decision']
         valid_statuses = ['risqué', 'modéré', 'fiable']
         
-        # Vérifier si tous les champs dans la demande sont modifiables
         for field in data.keys():
             if field not in modifiable_fields:
                 return jsonify({"error": f"Le champ '{field}' n'est pas modifiable."}), 400
         
-        # Vérifier la validité du champ statut (insensible à la casse)
         if 'statut' in data and data['statut'].lower() not in valid_statuses:
             return jsonify({"error": "Le champ 'statut' doit être l'un des suivants : 'risqué', 'modéré', 'fiable'."}), 400
         
-        # Vérifier si le client existe
         connexion = getConnexion()
         cursor = connexion.cursor()
         cursor.execute("SELECT COUNT(*) FROM clients WHERE id = %s", (client_id,))
@@ -562,17 +565,14 @@ def updateClient(client_id):
         updates = []
         params = []
 
-        # Ajouter les champs modifiables à la liste des mises à jour
         for field in modifiable_fields:
             if field in data:
                 updates.append(f"{field} = %s")
                 params.append(data[field])
 
-        # Si aucun champ modifiable n'est fourni, renvoyer une erreur
         if not updates:
             return jsonify({"error": "Aucun champ modifiable fourni."}), 400
 
-        # Construire la requête de mise à jour
         query = f"""
         UPDATE clients SET 
             {', '.join(updates)}
@@ -581,7 +581,6 @@ def updateClient(client_id):
         
         params.append(client_id)
 
-        # Exécuter la requête de mise à jour
         cursor.execute(query, params)
         connexion.commit()
         cursor.close()
@@ -592,35 +591,36 @@ def updateClient(client_id):
         return Response(json.dumps({'error': str(e)}), mimetype='application/json'), 500
     
 ###################  API pour les commandes  #####################
-
-@app.route('/GetOrders/<int:client_id>', methods=['GET'])
-def GetOrders(client_id):
+@app.route('/GetOrders/<int:company_id>/<int:client_id>', methods=['POST'])
+def GetOrders(company_id, client_id):
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
 
-        numero = request.args.get("numero")
-        date_min = request.args.get("date_min")
-        date_max = request.args.get("date_max")
-        montant_min = request.args.get("montant_min")
-        montant_max = request.args.get("montant_max")
-        date_livraison_min = request.args.get("date_livraison_min")
-        date_livraison_max = request.args.get("date_livraison_max")
-        etat_facture = request.args.get("etat_facture")
-        etat_livraison = request.args.get("etat_livraison")
-        sort_by = request.args.get('sort_by')
-        sort_order = request.args.get('sort_order', 'asc')
-        page = int(request.args.get('page', 1))
-        limit = int(request.args.get('limit', 2))
+        data = request.get_json()
+        
+        numero = data.get("numero")
+        date_min = data.get("date_min")
+        date_max = data.get("date_max")
+        montant_min = data.get("montant_min")
+        montant_max = data.get("montant_max")
+        date_livraison_min = data.get("date_livraison_min")
+        date_livraison_max = data.get("date_livraison_max")
+        etat_facture = data.get("etat_facture")
+        etat_livraison = data.get("etat_livraison")
+        sort_by = data.get('sort_by')
+        sort_order = data.get('sort_order', 'asc')
+        page = int(data.get('page', 1))
+        limit = int(data.get('limit', 2))
         offset = (page - 1) * limit
 
         query = """
         SELECT c.id, c.numero, c.date_commande, c.montant, c.date_livraison, c.etat_facture, c.etat_livraison
         FROM commande c 
         JOIN clients cl ON c.ref_client = cl.id
-        WHERE c.ref_client = %s
+        WHERE c.ref_client = %s and cl.company_id = %s
         """
-        params = [client_id]
+        params = [client_id, company_id]
 
         if numero:
             query += " AND c.numero = %s"
@@ -660,11 +660,11 @@ def GetOrders(client_id):
             query += " AND c.montant <= %s"
             params.append(montant_max)
         if etat_facture:
-            query += " AND c.etat_facture = %s"
-            params.append(etat_facture)
+            query += " AND c.etat_facture like %s"
+            params.append(etat_facture + '%')
         if etat_livraison:
-            query += " AND c.etat_livraison = %s"
-            params.append(etat_livraison)
+            query += " AND c.etat_livraison like %s"
+            params.append(etat_livraison + '%')
 
         if sort_by:
             if sort_order.lower() == 'desc':
@@ -710,7 +710,6 @@ def GetOrders(client_id):
                 }
                 order['details'].append(article)
 
-
             orders.append(order)
 
         json_response = json.dumps(orders, ensure_ascii=False, indent=4)
@@ -724,15 +723,17 @@ def GetOrders(client_id):
         connexion.close()
 
 
-
-@app.route('/GetFinancialSituation/<int:client_id>', methods=["GET"])
+@app.route('/GetFinancialSituation/<int:client_id>', methods=["POST"])
 def getFinancialSituation(client_id):
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
-        
+
+        # Vous pouvez récupérer des paramètres supplémentaires si nécessaire
+        data = request.get_json()  # Récupération du corps de la requête si besoin
+
         query = """
-        select c.reference, c.raison_sociale, c.statut, c.evaluation, s.ca_genere, s.montant_regle, s.encours,
+        SELECT c.reference, c.raison_sociale, c.statut, c.evaluation, s.ca_genere, s.montant_regle, s.encours,
         s.limite_credit, s.impaye, s.contentieux, s.provision_perte, s.preavis, s.lrs_recue
         FROM clients c
         JOIN situation_financiere s ON c.id = s.client_id
@@ -740,9 +741,10 @@ def getFinancialSituation(client_id):
         """
         cursor.execute(query, (client_id,))
         result = cursor.fetchone()
+
         if result is None:
-            return jsonify({"message": "Client not found"})
-        
+            return jsonify({"message": "Client not found"}), 404  # Code 404 pour "Not Found"
+
         situation_financiere = {
             "reference": result[0],
             "raison_sociale": result[1],
@@ -758,8 +760,10 @@ def getFinancialSituation(client_id):
             "preavis": result[11],
             "lrs_recue": result[12]
         }
+
         json_response = json.dumps(situation_financiere, ensure_ascii=False, indent=4)
         return Response(json_response, mimetype='application/json'), 200
+
     except Exception as e:
         return jsonify({"message": str(e)}), 500
 
@@ -767,24 +771,26 @@ def getFinancialSituation(client_id):
         cursor.close()
         connexion.close()
 
-
-@app.route('/GetPayments/<int:client_id>', methods = ["GET"])
+@app.route('/GetPayments/<int:client_id>', methods=["POST"])
 def getPayments(client_id):
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
 
-        reference = request.args.get("reference")
-        montant_min = request.args.get("montant_min")
-        montant_max = request.args.get("montant_max")
-        date_min = request.args.get("date_min")
-        date_max = request.args.get("date_max")
-        methode_paiement = request.args.get("methode_paiement")
-        etat = request.args.get("etat")
-        sort_by = request.args.get("sort_by")
-        sort_order = request.args.get('sort_order', 'asc')
-        page = int(request.args.get('page', 1))  
-        page_size = int(request.args.get('page_size', 2))  
+        # Récupération des paramètres dans le corps de la requête
+        data = request.get_json()
+
+        reference = data.get("reference")
+        montant_min = data.get("montant_min")
+        montant_max = data.get("montant_max")
+        date_min = data.get("date_min")
+        date_max = data.get("date_max")
+        methode_paiement = data.get("methode_paiement")
+        etat = data.get("etat")
+        sort_by = data.get("sort_by")
+        sort_order = data.get("sort_order", 'asc')
+        page = int(data.get('page', 1))
+        page_size = int(data.get('page_size', 2))
         offset = (page - 1) * page_size
 
         query = """
@@ -818,18 +824,18 @@ def getPayments(client_id):
             except ValueError:
                 return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
         if methode_paiement:
-            query += " AND p.methode_paiement like %s"
-            params.append(methode_paiement +'%')
+            query += " AND p.methode_paiement LIKE %s"
+            params.append(methode_paiement + '%')
         if etat:
-            query += " AND p.etat like %s"
-            params.append(etat +'%')
+            query += " AND p.etat LIKE %s"
+            params.append(etat + '%')
 
         if sort_by:
             if sort_order.lower() == 'desc':
                 query += f" ORDER BY p.{sort_by} DESC"
             else:
                 query += f" ORDER BY p.{sort_by} ASC"
-        
+
         query += " LIMIT %s OFFSET %s"
         params.extend([page_size, offset])
 
@@ -859,29 +865,40 @@ def getPayments(client_id):
                 paiement["factures"].append(facture_row[0])
 
             paiements.append(paiement)
+
         json_response = json.dumps(paiements, ensure_ascii=False, indent=4)
         return Response(json_response, mimetype='application/json'), 200
     except Exception as e:
         return jsonify({"message": str(e)}), 500
+    finally:
+        cursor.close()
+        connexion.close()
 
-@app.route('/GetSamples/<int:client_id>', methods=["GET"])
+@app.route('/GetSamples/<int:client_id>', methods=["POST"])
 def getSamples(client_id):
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
-        sort_by = request.args.get('sort_by')
-        sort_order = request.args.get('sort_order', 'asc')
+        
+        # Récupération des paramètres dans le corps de la requête
+        data = request.get_json()
+        
+        sort_by = data.get('sort_by')
+        sort_order = data.get('sort_order', 'asc')
+
         query = """
-        select id, reference_nom, date_souhaitee, date_envoi, quantite, etat, note
-        from echantillon
-        where client_id = %s
+        SELECT id, reference_nom, date_souhaitee, date_envoi, quantite, etat, note
+        FROM echantillon
+        WHERE client_id = %s
         """
         params = [client_id]
+
         if sort_by:
             if sort_order.lower() == 'desc':
                 query += f" ORDER BY {sort_by} DESC"
             else:
                 query += f" ORDER BY {sort_by} ASC"
+
         cursor.execute(query, params)
         rows = cursor.fetchall()
         echantillons = []
@@ -895,17 +912,19 @@ def getSamples(client_id):
             else:
                 reference = None
                 nom = reference_nom.strip('[]')
+
             produit = {
                 'id': row[0],
                 'reference': reference,
                 'nom': nom,
-                'date_souhaitee':row[2].strftime('%d/%m/%Y') if row[3] else None,
-                'date_envoi': row[3].strftime('%d/%m/%Y') if row[4] else None,
+                'date_souhaitee': row[2].strftime('%d/%m/%Y') if row[2] else None,
+                'date_envoi': row[3].strftime('%d/%m/%Y') if row[3] else None,
                 'quantite': row[4],
-                'etat':row[5],
-                'note':row[6]
+                'etat': row[5],
+                'note': row[6]
             }
             echantillons.append(produit)
+
         json_response = json.dumps(echantillons, ensure_ascii=False, indent=4)
         return Response(json_response, mimetype='application/json'), 200
     except Exception as e:
@@ -934,9 +953,9 @@ def addSample(client_id):
             return jsonify({"error": "Le champ 'etat' est obligatoire."}), 400
         if etat:
             etat = etat.strip().lower()  
-            valid_etats = ['demandé', 'envoyé', 'terminé']
+            valid_etats = ['demandé', 'envoyé', 'homologué', 'non homologué']
             if etat not in valid_etats:
-                return jsonify({"error": f"L'état '{etat}' n'est pas valide. Les valeurs acceptées sont: demandé, envoyé, terminé."}), 400
+                return jsonify({"error": f"L'état '{etat}' n'est pas valide. Les valeurs acceptées sont: demandé, envoyé, homologué, non homologué."}), 400
         date_souhaite_obj = None
         date_envoi_obj = None
         try:
@@ -976,26 +995,46 @@ def addSample(client_id):
             connexion.close()  
 
 
-@app.route('/DeleteSample/<int:client_id>/<int:sample_id>', methods=['DELETE'])
-def deleteSample(client_id, sample_id):
+@app.route('/DeleteSamples/<int:client_id>', methods=['DELETE'])
+def deleteSamples(client_id):
+    data = request.get_json()  # Récupère les données de la requête en JSON
+    sample_ids = data.get('sample_ids')  # Récupère la liste des sample_ids
+
+    if not sample_ids or not isinstance(sample_ids, list):
+        return jsonify({"error": "Veuillez fournir une liste valide d'IDs d'échantillons."}), 400
+
     connexion = None
     cursor = None
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
-        cursor.execute("SELECT * FROM echantillon WHERE id = %s AND client_id = %s", (sample_id, client_id))
-        echantillon = cursor.fetchone()
 
-        if not echantillon:
-            return jsonify({"error": "L'échantillon avec cet ID pour ce client n'existe pas."}), 404
+        # Vérifie que tous les échantillons existent pour le client
+        sql = "SELECT id FROM echantillon WHERE client_id = %s AND id IN (%s)" % (
+            client_id, ','.join(['%s'] * len(sample_ids))
+        )
+        cursor.execute(sql, sample_ids)
+        existing_samples = cursor.fetchall()
 
-        query = "delete from echantillon where id = %s AND client_id = %s"
-        cursor.execute(query, (sample_id, client_id))
+        existing_sample_ids = [sample[0] for sample in existing_samples]
+
+        # Si certains échantillons ne sont pas trouvés
+        if len(existing_sample_ids) != len(sample_ids):
+            missing_samples = list(set(sample_ids) - set(existing_sample_ids))
+            return jsonify({
+                "error": "Les échantillons suivants n'existent pas pour ce client : {}".format(missing_samples)
+            }), 404
+
+        # Supprime les échantillons trouvés
+        delete_sql = "DELETE FROM echantillon WHERE client_id = %s AND id IN (%s)" % (
+            client_id, ','.join(['%s'] * len(sample_ids))
+        )
+        cursor.execute(delete_sql, sample_ids)
         connexion.commit()
 
         return jsonify({
-            "message": "Échantillon supprimé avec succès",
-            "sample_id": sample_id,
+            "message": "Échantillons supprimés avec succès",
+            "deleted_sample_ids": existing_sample_ids,
             "client_id": client_id
         }), 200
 
@@ -1085,66 +1124,76 @@ def updateSample(client_id, sample_id):
 
 
 ### API pour relation client
-@app.route('/GetRecords/<int:client_id>', methods= ["GET"])
+@app.route('/GetRecords/<int:client_id>', methods=["POST"])
 def getRecords(client_id):
     try:
-        date_min = request.args.get("date_min")
-        date_max = request.args.get("date_max")
-        nom = request.args.get("nom")
-        prenom = request.args.get("prenom")
-        favori = request.args.get("favori")
-        important = request.args.get("important")
+        # Récupération des paramètres dans le corps de la requête
+        data = request.get_json()
+        
+        date_min = data.get("date_min")
+        date_max = data.get("date_max")
+        nom = data.get("nom")
+        prenom = data.get("prenom")
+        favori = data.get("favori")
+        important = data.get("important")
+        text = data.get('text')
+
         connexion = getConnexion()
         cursor = connexion.cursor()
+        
         query = """
-        select * from records where client_id = %s
+        SELECT * FROM records WHERE client_id = %s
         """
         params = [client_id]
+
         if date_min:
             try:
-                date_obj = datetime.strptime(date_min, '%d/%m/%Y').date()
+                date_obj = datetime.strptime(date_min, '%d/%m/%Y %H:%M:%S').date()
                 query += " AND record_date_time >= %s"
                 params.append(date_obj)
             except ValueError:
                 return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+        
         if date_max:
             try:
-                date_obj = datetime.strptime(date_max, '%d/%m/%Y').date()
+                date_obj = datetime.strptime(date_max, '%d/%m/%Y %H:%M:%S').date()
                 query += " AND record_date_time <= %s"
                 params.append(date_obj)
             except ValueError:
                 return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+        
         if nom:
-            query += " and user_name like %s"
-            params.append(nom)
+            query += " AND user_name LIKE %s"
+            params.append(nom +'%')  # Utilisation de % pour faire une recherche LIKE
         if prenom:
-            query += " and prenom like %s"
-            params.append(prenom)
-        if favori:
-            query += " and favori = %s"
+            query += " AND prenom LIKE %s"
+            params.append(prenom +'%')  # Utilisation de % pour faire une recherche LIKE
+        if favori is not None:  # Vérifie si favori a été défini (peut être True ou False)
+            query += " AND favori = %s"
             params.append(favori)
-        if important:
-            query += " and important = %s"
+        if important is not None:  # Vérifie si important a été défini (peut être True ou False)
+            query += " AND important = %s"
             params.append(important)
+        if text:
+            query += " AND record_text LIKE %s"
+            params.append(f'%{text}%')  # Utilisation de % pour faire une recherche LIKE
         
         cursor.execute(query, params)
-
-        #cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
         records = []
         for row in rows:
             record = {
-                'record_date':row[1].strftime('%d/%m/%Y %H:%M:%S') if row[1] else None,
+                'record_date': row[1].strftime('%d/%m/%Y %H:%M:%S') if row[1] else None,
                 'record_type': row[2],
-                'nom':row[3],
-                'prenom':row[4],
+                'nom': row[3],
+                'prenom': row[4],
                 'record_text': row[5],
                 'favori': row[6],
                 'important': row[7]
             }
             records.append(record)
-            
-        return jsonify(records)
+        
+        return jsonify(records), 200
     except Exception as e:
         return jsonify({"message": str(e)}), 500
     finally:
@@ -1203,32 +1252,38 @@ def addRecord(client_id):
 
 
 ###############"" les API pour les produits ###############"
-
-@app.route('/GetProducts', methods = ['GET'])
-def getProducts():
+@app.route('/GetProductsList/<int:company_id>', methods=['POST'])
+def getProductsList(company_id):
     try:
-        reference = request.args.get('reference')
-        nom = request.args.get('nom')
-        date_min = request.args.get('date_min')
-        date_max = request.args.get('date_max')
-        quantite_min = request.args.get('quantite_min')
-        quantite_max = request.args.get('quantite_max')
-        secteur = request.args.get('secteur')
-        sort_by = request.args.get('sort_by')
-        sort_order = request.args.get('sort_order', 'asc')
-        page = request.args.get('page', 1, type=int)
-        limit = int(request.args.get('limit', 2))
+        # Récupération des paramètres dans le corps de la requête
+        data = request.get_json()
+
+        reference = data.get('reference')
+        nom = data.get('nom')
+        date_min = data.get('date_min') 
+        date_max = data.get('date_max')
+        quantite_min = data.get('quantite_min')
+        quantite_max = data.get('quantite_max')
+        secteur = data.get('secteur')
+        sort_by = data.get('sort_by')
+        sort_order = data.get('sort_order', 'asc')
+
+        # Convertir le paramètre 'page' en int avec une valeur par défaut de 1
+        page = int(data.get('page', 1))
+        limit = int(data.get('limit', 3))
         offset = (page - 1) * limit
 
         connexion = getConnexion()
         cursor = connexion.cursor()
+        
         query = """
-        select p.id, p.reference, p.nom, p.date_derniere_commande, p.quantite_stock, GROUP_CONCAT(s.nom SEPARATOR ', ') as secteurs
-        from produit p 
-        left join produit_secteur ps on p.id = ps.produit_id
-        left join secteur s on ps.secteur_id = s.id
+        SELECT p.id, p.reference, p.nom, p.date_derniere_commande, p.quantite_stock, GROUP_CONCAT(s.nom SEPARATOR ', ') as secteurs
+        FROM produit p 
+        LEFT JOIN produit_secteur ps ON p.id = ps.produit_id
+        LEFT JOIN secteur s ON ps.secteur_id = s.id
+        where p.company_id = %s
         """
-        params = []
+        params = [company_id]
         conditions = []
         
         if reference:
@@ -1236,7 +1291,7 @@ def getProducts():
             params.append(reference)
         if nom:
             conditions.append("p.nom LIKE %s")
-            params.append(nom+'%') 
+            params.append(nom + '%') 
         if date_min:
             try:
                 date_obj = datetime.strptime(date_min, '%d/%m/%Y').date()
@@ -1267,6 +1322,7 @@ def getProducts():
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
+        
         query += """
         GROUP BY p.id, p.reference, p.nom, p.date_derniere_commande, p.quantite_stock
         """
@@ -1301,19 +1357,18 @@ def getProducts():
 
 
 
-@app.route('/GetProductDetails/<int:product_id>', methods = ["GET"])
+@app.route('/GetProductDetails/<int:product_id>', methods=["POST"])
 def getProductDetails(product_id):
     try:
-        sort_by = request.args.get('sort_by')
-        sort_order = request.args.get('sort_order', 'asc')
-
+        # Récupération des données dans le corps de la requête
+        data = request.get_json()
         connexion = getConnexion()
         cursor = connexion.cursor()
 
         query = """
-        select p.reference, p.nom, p.quantite_stock, p.prix_vente, p.note_commentaire
-        from produit p
-        where p.id = %s
+        SELECT p.reference, p.nom, p.quantite_stock, p.prix_vente, p.note_commentaire
+        FROM produit p
+        WHERE p.id = %s
         """
         cursor.execute(query, (product_id,))
         row = cursor.fetchone()
@@ -1330,30 +1385,22 @@ def getProductDetails(product_id):
         }
 
         query_secteurs = """
-        select s.nom from produit_secteur ps
-        join secteur s on ps.secteur_id = s.id
-        where ps.produit_id = %s
+        SELECT s.nom FROM produit_secteur ps
+        JOIN secteur s ON ps.secteur_id = s.id
+        WHERE ps.produit_id = %s
         """
         cursor.execute(query_secteurs, (product_id,))
         secteurs_rows = cursor.fetchall()
         secteurs = [row[0] for row in secteurs_rows]
         product['secteurs'] = secteurs
 
-        # Définir le tri par défaut ou en fonction des paramètres
-        sort_by_fields = ['valeur', 'quantite_en_stock', 'seuil', 'prix_vente_objectif', 'prix_vente_min', 'date_derniere_commande', 'date_expiration']
-        if sort_by not in sort_by_fields:
-            sort_by = 'valeur'  # Par défaut, trier par "valeur"
-        sort_order = 'DESC' if sort_order.lower() == 'desc' else 'ASC'  # Trier en 'ASC' par défaut, sinon 'DESC' si spécifié
-
-        # Requête pour les variantes avec tri
         query_variante = f"""
-        select vp.id, v.valeur, vp.quantite_en_stock, vp.seuil, vp.prix_vente_objectif, vp.prix_vente_min,
+        SELECT vp.id, v.valeur, vp.quantite_en_stock, vp.seuil, vp.prix_vente_objectif, vp.prix_vente_min,
         vp.date_derniere_commande, vp.date_expiration 
-        from variantes v
-        join variante_produit vp 
-        on v.id = vp.variante_id
-        where produit_id = %s
-        ORDER BY {sort_by} {sort_order}
+        FROM variantes v
+        JOIN variante_produit vp 
+        ON v.id = vp.variante_id
+        WHERE produit_id = %s
         """
 
         cursor.execute(query_variante, (product_id,))
@@ -1375,7 +1422,6 @@ def getProductDetails(product_id):
 
         product['variantes'] = variantes
 
-        # Retourner la réponse JSON
         json_response = json.dumps(product, ensure_ascii=False, indent=4)
         return Response(json_response, mimetype='application/json'), 200
 
@@ -1440,6 +1486,629 @@ def updateProduct(product_id):
     finally:
         cursor.close()
         connexion.close()
+
+
+@app.route('/GetProducts', methods=['POST'])
+def getProducts():
+    try:
+        # Obtenir le terme de recherche à partir du corps de la requête JSON
+        data = request.get_json()
+        search_term = data.get('search_term', '')
+
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+
+        query = """
+        SELECT id, ref_article, nom
+        FROM article
+        WHERE ref_article LIKE %s OR nom LIKE %s
+        ORDER BY nom ASC
+        """
+        
+        search_term_like = f'{search_term}%'
+
+        cursor.execute(query, (search_term_like, search_term_like))
+        rows = cursor.fetchall()
+
+        if not rows:
+            return jsonify({"error": "No products found"}), 404
+        
+        products = []
+        for row in rows:
+            product = {
+                "id": row[0],
+                "ref_article": row[1],
+                "nom": row[2]
+            }
+            products.append(product)
+
+        return jsonify(products), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        connexion.close()
+
+@app.route('/GetProductPurchase/<int:product_id>', methods=["POST"]) ### to V1
+def getProductPurchase(product_id):
+    try:
+        data = request.get_json()
+
+        numero = data.get('numero')
+        reference = data.get('reference')
+        fournisseur = data.get('fournisseur')
+        etat_paiement = data.get('etat_paiement')
+        date_min = data.get('date_min')
+        date_max = data.get('date_max')
+        montant_min = data.get('montant_min')
+        montant_max = data.get('montant_max')
+        sort_by = data.get('sort_by')
+        sort_order = data.get('sort_order', 'asc')
+        page = int(data.get('page', 1)) 
+        per_page = int(data.get('per_page', 1))
+
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+
+        query = """
+        SELECT a.id, a.numero_facture, f.reference, f.nom_fournisseur, a.date_facturation, a.montant, a.etat_paiement
+        FROM achat_produit a
+        JOIN fournisseur f ON f.id = a.fournisseur_id
+        WHERE a.produit_id = %s
+        """
+        
+        params = [product_id]
+        
+        if numero:
+            query += " AND a.numero_facture = %s"
+            params.append(numero)
+        if reference:
+            query += " AND f.reference = %s"
+            params.append(reference)
+        if fournisseur:
+            query += " AND f.nom_fournisseur LIKE %s"
+            params.append(fournisseur + '%')
+        if etat_paiement:
+            query += " AND a.etat_paiement LIKE %s"
+            params.append(etat_paiement + '%')
+        if date_min:
+            try:
+                date_obj = datetime.strptime(date_min, '%d/%m/%Y').date()
+                query += " AND a.date_facturation >= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+        if date_max:
+            try:
+                date_obj = datetime.strptime(date_max, '%d/%m/%Y').date()
+                query += " AND a.date_facturation <= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+        if montant_min:
+            query += " AND a.montant >= %s"
+            params.append(montant_min)
+        if montant_max:
+            query += " AND a.montant <= %s"
+            params.append(montant_max)
+
+        if sort_by in ['numero_facture', 'reference', 'nom_fournisseur', 'date_facturation', 'montant', 'etat_paiement']:
+            query += f" ORDER BY {sort_by} {sort_order}"
+
+        offset = (page - 1) * per_page
+        query += " LIMIT %s OFFSET %s"
+        params.extend([per_page, offset])
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        produits = []
+        for row in rows:
+            produit = {
+                'id': row[0],
+                'numero_facture': row[1],
+                'reference': row[2],
+                'nom_fournisseur': row[3],
+                'date_facturation': row[4].strftime('%d/%m/%Y') if row[4] else None,
+                'montant': row[5],
+                'etat_paiement': row[6]
+            }
+            produits.append(produit)
+
+        json_response = json.dumps(produits, ensure_ascii=False, indent=4)
+        return Response(json_response, mimetype='application/json'), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        connexion.close()
+
+
+@app.route('/GetProductSales/<int:product_id>', methods=["POST"])
+def getProductSales(product_id):
+    try:
+        # Retrieve parameters from JSON body
+        data = request.json
+        numero_facture = data.get('numero_facture')
+        reference_client = data.get('reference_client')
+        raison_sociale = data.get('raison_sociale')
+        date_facturation_min = data.get('date_facturation_min')
+        date_facturation_max = data.get('date_facturation_max')
+        date_echeance_min = data.get('date_echeance_min')
+        date_echeance_max = data.get('date_echeance_max')
+        montant_min = data.get('montant_min')
+        montant_max = data.get('montant_max')
+        etat_paiement = data.get('etat_paiement')
+        sort_by = data.get('sort_by')
+        sort_order = data.get('sort_order', 'asc')
+        page = int(data.get('page', 1))
+        per_page = int(data.get('per_page', 2))
+
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+
+        query = """
+        SELECT v.id, v.numero_facture, c.reference, c.raison_sociale, v.date_facturation, v.date_echeance,
+        v.montant, v.etat_paiement FROM vente_produit v
+        JOIN clients c ON v.client_id = c.id
+        WHERE v.produit_id = %s
+        """
+        params = [product_id]
+
+        if numero_facture:
+            query += " AND v.numero_facture = %s"
+            params.append(numero_facture)
+        if reference_client:
+            query += " AND c.reference = %s"
+            params.append(reference_client)
+        if raison_sociale:
+            query += " AND c.raison_sociale LIKE %s"
+            params.append(raison_sociale + '%')
+        if date_facturation_min:
+            try:
+                date_obj = datetime.strptime(date_facturation_min, '%d/%m/%Y').date()
+                query += " AND v.date_facturation >= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+        if date_facturation_max:
+            try:
+                date_obj = datetime.strptime(date_facturation_max, '%d/%m/%Y').date()
+                query += " AND v.date_facturation <= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+        if date_echeance_min:
+            try:
+                date_obj = datetime.strptime(date_echeance_min, '%d/%m/%Y').date()
+                query += " AND v.date_echeance >= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+        if date_echeance_max:
+            try:
+                date_obj = datetime.strptime(date_echeance_max, '%d/%m/%Y').date()
+                query += " AND v.date_echeance <= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+        if montant_min:
+            query += " AND v.montant >= %s"
+            params.append(montant_min)
+        if montant_max:
+            query += " AND v.montant <= %s"
+            params.append(montant_max)
+        if etat_paiement:
+            query += " AND v.etat_paiement LIKE %s"
+            params.append(etat_paiement + '%')
+        if sort_by in ["numero_facture", "reference", "raison_sociale", "date_facturation", "date_echeance", "montant", "etat_paiement"]:
+            query += f" ORDER BY {sort_by} {sort_order}"
+
+        offset = (page - 1) * per_page
+        query += " LIMIT %s OFFSET %s"
+        params.extend([per_page, offset])
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        sales = []
+        for row in rows:
+            sale = {
+                'id': row[0],
+                'numero_facture': row[1],
+                'reference': row[2],
+                'raison_sociale': row[3],
+                'date_facturation': row[4].strftime('%d/%m/%Y') if row[4] else None,
+                'date_echeance': row[5].strftime('%d/%m/%Y') if row[5] else None,
+                'montant': row[6],
+                'etat_paiement': row[7]
+            }
+            sales.append(sale)
+
+        json_response = json.dumps(sales, ensure_ascii=False, indent=4)
+        return Response(json_response, mimetype='application/json'), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        connexion.close()
+
+@app.route('/GetSamplesOfProduct/<int:product_id>', methods=["POST"])
+def getSamplesOfProduct(product_id):
+    try:
+        # Retrieve parameters from JSON body
+        data = request.json
+        reference_client = data.get('reference_client')
+        raison_sociale = data.get('raison_sociale')
+        date_souhaitee_min = data.get('date_souhaitee_min')
+        date_souhaitee_max = data.get('date_souhaitee_max')
+        date_envoi_min = data.get('date_envoi_min')
+        date_envoi_max = data.get('date_envoi_max')
+        quantite_min = data.get('quantite_min')
+        quantite_max = data.get('quantite_max')
+        etat = data.get('etat')
+        note = data.get('note')
+        sort_by = data.get('sort_by')
+        sort_order = data.get('sort_order', 'asc')
+        page = int(data.get('page', 1))
+        per_page = int(data.get('per_page', 2))
+
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+
+        query = """
+        SELECT e.id,
+               CASE 
+                   WHEN c.raison_sociale IS NOT NULL THEN c.reference 
+                   ELSE NULL 
+               END AS reference,
+               CASE 
+                   WHEN c.raison_sociale IS NOT NULL THEN c.raison_sociale 
+                   ELSE e.raison_sociale 
+               END AS raison_sociale,
+               e.date_souhaitee, 
+               e.date_envoi, 
+               e.quantite, 
+               e.etat, 
+               e.note
+        FROM echantillon e
+        LEFT JOIN clients c ON c.raison_sociale = e.raison_sociale
+        WHERE e.produit_id = %s
+        """
+        params = [product_id]
+
+        if reference_client:
+            query += " AND c.reference = %s"
+            params.append(reference_client)
+        if raison_sociale:
+            query += " AND (c.raison_sociale like %s OR e.raison_sociale like %s)"
+            params.append(raison_sociale +'%')
+            params.append(raison_sociale +'%')
+        if date_souhaitee_min:
+            try:
+                date_obj = datetime.strptime(date_souhaitee_min, '%d/%m/%Y').date()
+                query += " AND e.date_souhaitee >= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400 
+        if date_souhaitee_max:
+            try:
+                date_obj = datetime.strptime(date_souhaitee_max, '%d/%m/%Y').date()
+                query += " AND e.date_souhaitee <= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400 
+        if date_envoi_min:
+            try:
+                date_obj = datetime.strptime(date_envoi_min, '%d/%m/%Y').date()
+                query += " AND e.date_envoi >= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400 
+        if date_envoi_max:
+            try:
+                date_obj = datetime.strptime(date_envoi_max, '%d/%m/%Y').date()
+                query += " AND e.date_envoi <= %s"
+                params.append(date_obj)
+            except ValueError:
+                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400 
+        if quantite_min:
+            query += " AND e.quantite >= %s"
+            params.append(quantite_min)
+        if quantite_max:
+            query += " AND e.quantite <= %s"
+            params.append(quantite_max)
+        if etat:
+            query += " AND e.etat like %s"
+            params.append(etat +'%')
+        if note:
+            query += " AND e.note LIKE %s"
+            params.append('%' + note + '%')
+
+        if sort_by in ["reference", "raison_sociale", "date_souhaitee", "date_envoi", "quantite", "etat", "note"]:
+            query += f" ORDER BY {sort_by} {sort_order}"
+
+        offset = (page - 1) * per_page
+        query += " LIMIT %s OFFSET %s"
+        params.extend([per_page, offset])
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        samples = []
+
+        for row in rows:
+            sample = {
+                'id': row[0],
+                'reference': row[1],
+                'raison_sociale': row[2],
+                'date_souhaitee': row[3].strftime('%d/%m/%Y') if row[3] else None,
+                'date_envoi': row[4].strftime('%d/%m/%Y') if row[4] else None,
+                'quantite': row[5],
+                'etat': row[6],
+                'note': row[7]
+            }
+            samples.append(sample)
+
+        json_response = json.dumps(samples, ensure_ascii=False, indent=4)
+        return Response(json_response, mimetype='application/json'), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        connexion.close()
+
+@app.route('/GetProductSampleDetails/<int:product_id>/<int:sample_id>', methods=["POST"])
+def getProductSampleDetails(product_id, sample_id):
+    try:
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+
+        query = """
+        SELECT e.raison_sociale, e.date_souhaitee, e.date_envoi, e.quantite, e.etat, e.note
+        FROM echantillon e
+        WHERE e.produit_id = %s AND e.id = %s
+        """
+        params = [product_id, sample_id]
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+
+        if row:  
+            detail = {
+                'raison_sociale': row[0],
+                'date_souhaitee': row[1].strftime('%d/%m/%Y') if row[1] else None,
+                'date_envoi': row[2].strftime('%d/%m/%Y') if row[2] else None,
+                'quantite': row[3],
+                'etat': row[4],
+                'note': row[5]
+            }
+            json_response = json.dumps(detail, ensure_ascii=False, indent=4)
+            return Response(json_response, mimetype='application/json'), 200
+        else:
+            return jsonify({"error": "Sample not found"}), 404
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cursor.close()
+        connexion.close()
+
+@app.route('/AddSampleOfProduct/<int:product_id>', methods=["POST"])
+def addSampleOfProduct(product_id):
+    try:
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+        data = request.get_json()
+        raison_sociale = data.get('raison_sociale', '').strip() if data.get('raison_sociale') else None
+        date_souhaitee = data.get('date_souhaitee', '').strip() if data.get('date_souhaitee') else None
+        date_envoi = data.get('date_envoi', '').strip() if data.get('date_envoi') else None
+        quantite = data.get('quantite')
+        etat = data.get('etat', '').strip() if data.get('etat') else None
+        note = data.get('note', '').strip() if data.get('note') else None
+
+        if not raison_sociale:
+            return jsonify({"error": "Le champ raison sociale est obligatoire"}), 400
+        if not etat:
+            return jsonify({"error": "Le champ etat est obligatoire"}), 400
+        
+        etat = etat.strip().lower()
+        valid_etat = ["demandé", "envoyé", "homologué", "non homologué"]
+        if etat not in valid_etat:
+            return jsonify({"error": "L'état n'est pas valide"}), 400
+        
+        date_souhaitee_obj = None
+        date_envoi_obj = None
+        try:
+            if date_souhaitee:
+                date_souhaitee_obj = datetime.strptime(date_souhaitee, '%d/%m/%Y').date()
+            if date_envoi:
+                date_envoi_obj = datetime.strptime(date_envoi, '%d/%m/%Y').date()
+        except ValueError:
+            return jsonify({"error": "Date invalide, veuillez utiliser le format dd/mm/yyyy"}), 400
+
+        query = """
+        INSERT INTO echantillon (date_souhaitee, date_envoi, quantite, etat, note, produit_id, raison_sociale)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        params = (date_souhaitee_obj, date_envoi_obj, quantite, etat, note, product_id, raison_sociale)
+        try:
+            cursor.execute(query, params)
+            connexion.commit()
+            new_sample_id = cursor.lastrowid
+        except Exception as e:
+            connexion.rollback()
+            return jsonify({"error": str(e)}), 500
+
+
+        return jsonify({"message": "Échantillon ajouté avec succès", "sample_id": new_sample_id}), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        cursor.close()
+        connexion.close()
+
+@app.route('/GetCompanyName', methods=["POST"])
+def getCompanyName():
+    try:
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+
+        # Obtenir le terme de recherche à partir du corps de la requête
+        data = request.get_json()
+        search_term = data.get('search_term', '')
+
+        query = """
+        SELECT id, raison_sociale FROM clients
+        WHERE raison_sociale LIKE %s
+        ORDER BY raison_sociale ASC
+        """
+        search_term_like = f'{search_term}%'
+        cursor.execute(query, (search_term_like,))
+        rows = cursor.fetchall()
+
+        if not rows:
+            return jsonify({"error": "no company name found"}), 404  # Retourne 404 si aucune entreprise n'est trouvée
+
+        companyNames = []
+        for row in rows:
+            company = {
+                'id': row[0],
+                'raison_sociale': row[1]
+            }
+            companyNames.append(company)
+
+        return jsonify(companyNames), 200  # Retourne la liste des entreprises au format JSON
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500  # Retourne une erreur interne du serveur
+    finally:
+        if cursor:
+            cursor.close()
+        if connexion:
+            connexion.close()
+
+
+@app.route('/UpdateSampleOfProduct/<int:product_id>/<int:sample_id>', methods=["PUT"])
+def updateSampleOfProduct(product_id, sample_id):
+    connexion = getConnexion()
+    cursor = connexion.cursor()
+
+    data = request.get_json()
+    raison_sociale = data.get('raison_sociale', '').strip()
+    date_souhaitee = data.get('date_souhaitee', '').strip() if data.get('date_souhaitee') else None
+    date_envoi = data.get('date_envoi', '').strip() if data.get('date_envoi') else None
+    quantite = data.get('quantite')
+    etat = data.get('etat', '').strip()
+    note = data.get('note', '').strip()
+
+    # Vérification de l'état
+    valid_etat = ["demandé", "envoyé", "homologué", "non homologué"]
+    if etat and etat.lower() not in valid_etat:
+        return jsonify({"error": "L'état doit être l'un des suivants : 'demandé', 'envoyé', 'homologué', 'non homologué'"}), 400
+
+    def convert_to_date(date_str):
+        if date_str:
+            try:
+                return datetime.strptime(date_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+            except ValueError:
+                return None
+        return None
+
+    date_souhaitee_db = convert_to_date(date_souhaitee)
+    date_envoi_db = convert_to_date(date_envoi)
+
+    if (date_souhaitee and not date_souhaitee_db) or (date_envoi and not date_envoi_db):
+        return jsonify({"error": "Format de date invalide, veuillez utiliser dd/mm/yyyy"}), 400
+
+    cursor.execute("SELECT * FROM echantillon WHERE id = %s AND produit_id = %s", (sample_id, product_id))
+    echantillon = cursor.fetchone()
+    if not echantillon:
+        return jsonify({"error": "Echantillon non trouvé"})
+
+    update_fields = []
+    params = []
+    if raison_sociale:
+        update_fields.append("raison_sociale = %s")
+        params.append(raison_sociale)
+    if date_souhaitee_db:
+        update_fields.append("date_souhaitee = %s")
+        params.append(date_souhaitee_db)
+    if date_envoi_db:
+        update_fields.append("date_envoi = %s")
+        params.append(date_envoi_db)
+    if quantite:
+        update_fields.append("quantite = %s")
+        params.append(quantite)
+    if etat:
+        update_fields.append("etat = %s")
+        params.append(etat)
+    if note:
+        update_fields.append("note = %s")
+        params.append(note)
+
+    if not update_fields:
+        return jsonify({"error": "Aucune donnée à mettre à jour"})
+
+    query = "UPDATE echantillon SET " + ", ".join(update_fields) + " WHERE id = %s AND produit_id = %s"
+    params.extend([sample_id, product_id])
+
+    try:
+        cursor.execute(query, params)
+        connexion.commit()
+    except Exception as e:
+        connexion.rollback()
+        return jsonify({"error": str(e)})
+    finally:
+        cursor.close()
+        connexion.close()
+
+    return jsonify({"message": "Echantillon mis à jour avec succès"})
+
+@app.route('/DeleteSamplesOfProduct/<int:product_id>', methods=["DELETE"])
+def deleteSamplesOfProduct(product_id):
+    connexion = None
+    cursor = None
+    try:
+        connexion = getConnexion()
+        cursor = connexion.cursor()
+
+        request_data = request.get_json()
+        sample_ids = request_data.get('sample_ids')
+
+        if not sample_ids or not isinstance(sample_ids, list):
+            return jsonify({"error": "Veuillez fournir une liste valide d'IDs d'échantillons."}), 400
+
+        placeholders = ', '.join(['%s'] * len(sample_ids))  
+        cursor.execute(f"SELECT * FROM echantillon WHERE id IN ({placeholders}) AND produit_id = %s", (*sample_ids, product_id))
+        existing_samples = cursor.fetchall()
+
+        if not existing_samples:
+            return jsonify({"error": "Aucun échantillon trouvé pour ce produit."}), 404
+
+        query = f"DELETE FROM echantillon WHERE id IN ({placeholders}) AND produit_id = %s"
+        cursor.execute(query, (*sample_ids, product_id))
+        connexion.commit()
+
+        return jsonify({
+            "message": "Échantillons supprimés avec succès",
+            "deleted_sample_ids": sample_ids,
+            "product_id": product_id
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        if cursor:
+            cursor.close()
+        if connexion:
+            connexion.close()
 
 if __name__ == "__main__":
     app.run(debug=True)
