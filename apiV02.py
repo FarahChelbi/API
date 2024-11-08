@@ -22,10 +22,12 @@ def test_connexion():
        print("Connected to MySQL database") 
     return connexion
 
-@app.route('/GetUser/<email>', methods=['POST'])
-def getUser(email):
+@app.route('/GetUser', methods=['POST'])
+def getUser():
+    data = request.get_json()
+    email = data.get('email')
     if not email:
-        return jsonify({"error": "Email manquant dans l'URL"}), 400
+        return jsonify({"error": "Email manquant dans la requête"}), 400
     
     connexion = getConnexion()
     cursor = connexion.cursor()
@@ -79,15 +81,18 @@ def getUser(email):
         }
     }), 200
 
-@app.route('/GetUsers/<int:company_id>', methods=["POST"])  
-def getUsers(company_id):
-    data = request.get_json()  
+@app.route('/GetUsers', methods=["POST"])  
+def getUsers():
+    data = request.get_json() 
+    company_id = data.get('company_id') 
     nom = data.get("nom")
     prenom = data.get("prenom")
     email = data.get("email")
     status = data.get("status")
     sort_by = data.get('sort_by')
     sort_order = data.get('sort_order', 'asc')
+    if not company_id:
+        return jsonify({"error": "company_id manquant dans la requête"}), 400
 
     connexion = getConnexion()
     cursor = connexion.cursor()
@@ -187,13 +192,16 @@ def addUser():
         connexion.close()
     return jsonify({"message" : "Utilisateur ajouté", "user_id": new_user_id}),201
 
-@app.route('/UpdateUser/<int:user_id>', methods=["PUT"])
-def updateUser(user_id):
+@app.route('/UpdateUser', methods=["PUT"])
+def updateUser():
     data = request.json
+    user_id = data.get('user_id')
     nom = data.get('nom','').strip()
     prenom = data.get('prenom','').strip()
     email = data.get('email','').strip()
     access = data.get('access')
+    if not user_id:
+        return jsonify({"error":"user_id est obligatoire"})
     connexion = getConnexion()
     cursor = connexion.cursor()
     cursor.execute("SELECT * FROM utilisateur WHERE id = %s", (user_id,))
@@ -307,10 +315,11 @@ def getUserDetails():
 
 
 
-@app.route('/GetClients/<int:company_id>', methods=['POST'])
-def getClients(company_id):
+@app.route('/GetClients', methods=['POST'])
+def getClients():
     try:
         data = request.get_json()
+        company_id = data.get('company_id')
         reference = data.get('reference')
         raison_sociale = data.get('raison_sociale')
         statut = data.get('statut')
@@ -328,6 +337,8 @@ def getClients(company_id):
         sort_order = data.get('sort_order', 'asc')
         page = data.get('page', 1)
         per_page = data.get('per_page', 10)
+        if not company_id:
+            return jsonify({"error": "company_id est obligatoire"})
 
         connexion = getConnexion()  
         cursor = connexion.cursor()
@@ -539,16 +550,19 @@ def getClientDetails():
         cursor.close()
         connexion.close()
 
-@app.route('/UpdateClient/<int:client_id>', methods=['PUT'])
-def updateClient(client_id):
+@app.route('/UpdateClient', methods=['PUT'])
+def updateClient():
     try:
-        data = request.json
+        data = request.get_json()
+        client_id = data.get('client_id')
+        if not client_id:
+            return jsonify({"error": "client_id est obligatoire"})
         
         modifiable_fields = ['statut', 'evaluation', 'raison', 'info_personnelles', 'preference', 'decision']
         valid_statuses = ['risqué', 'modéré', 'fiable']
         
         for field in data.keys():
-            if field not in modifiable_fields:
+            if field not in modifiable_fields and field != "client_id":
                 return jsonify({"error": f"Le champ '{field}' n'est pas modifiable."}), 400
         
         if 'statut' in data and data['statut'].lower() not in valid_statuses:
@@ -591,13 +605,16 @@ def updateClient(client_id):
         return Response(json.dumps({'error': str(e)}), mimetype='application/json'), 500
     
 ###################  API pour les commandes  #####################
-@app.route('/GetOrders/<int:company_id>/<int:client_id>', methods=['POST'])
-def GetOrders(company_id, client_id):
+@app.route('/GetOrders/', methods=['POST'])
+def GetOrders():
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
 
         data = request.get_json()
+
+        company_id = data.get('company_id')
+        client_id = data.get('client_id')
         
         numero = data.get("numero")
         date_min = data.get("date_min")
@@ -613,6 +630,10 @@ def GetOrders(company_id, client_id):
         page = int(data.get('page', 1))
         limit = int(data.get('limit', 2))
         offset = (page - 1) * limit
+        if not company_id:
+            return jsonify({"error": "company_id est obligatoire"})
+        if not client_id:
+            return jsonify({"error": "client_id est obligatoire"})
 
         query = """
         SELECT c.id, c.numero, c.date_commande, c.montant, c.date_livraison, c.etat_facture, c.etat_livraison
@@ -723,14 +744,17 @@ def GetOrders(company_id, client_id):
         connexion.close()
 
 
-@app.route('/GetFinancialSituation/<int:client_id>', methods=["POST"])
-def getFinancialSituation(client_id):
+@app.route('/GetFinancialSituation', methods=["POST"])
+def getFinancialSituation():
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
 
         # Vous pouvez récupérer des paramètres supplémentaires si nécessaire
         data = request.get_json()  # Récupération du corps de la requête si besoin
+        client_id = data.get('client_id')
+        if not client_id:
+            return jsonify({"error": "client_id est obligatoire"})
 
         query = """
         SELECT c.reference, c.raison_sociale, c.statut, c.evaluation, s.ca_genere, s.montant_regle, s.encours,
@@ -771,14 +795,15 @@ def getFinancialSituation(client_id):
         cursor.close()
         connexion.close()
 
-@app.route('/GetPayments/<int:client_id>', methods=["POST"])
-def getPayments(client_id):
+@app.route('/GetPayments', methods=["POST"])
+def getPayments():
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
 
         # Récupération des paramètres dans le corps de la requête
         data = request.get_json()
+        client_id = data.get('client_id')
 
         reference = data.get("reference")
         montant_min = data.get("montant_min")
@@ -792,6 +817,8 @@ def getPayments(client_id):
         page = int(data.get('page', 1))
         page_size = int(data.get('page_size', 2))
         offset = (page - 1) * page_size
+        if not client_id:
+            return jsonify({"error": "client_id est obligatoire"})
 
         query = """
         SELECT p.id, p.date_paiement, p.reference, p.montant, p.methode_paiement, p.etat
@@ -874,17 +901,20 @@ def getPayments(client_id):
         cursor.close()
         connexion.close()
 
-@app.route('/GetSamples/<int:client_id>', methods=["POST"])
-def getSamples(client_id):
+@app.route('/GetSamples', methods=["POST"])
+def getSamples():
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
         
         # Récupération des paramètres dans le corps de la requête
         data = request.get_json()
+        client_id = data.get('client_id')
         
         sort_by = data.get('sort_by')
         sort_order = data.get('sort_order', 'asc')
+        if not client_id:
+            return jsonify({"error": "client_id est obligatoire"})
 
         query = """
         SELECT id, reference_nom, date_souhaitee, date_envoi, quantite, etat, note
@@ -933,12 +963,13 @@ def getSamples(client_id):
         cursor.close()
         connexion.close()
 
-@app.route('/AddSample/<int:client_id>', methods=['POST'])
-def addSample(client_id):
+@app.route('/AddSample', methods=['POST'])
+def addSample():
     connexion = None
     cursor = None
     try:
         data = request.get_json()
+        client_id = data.get('client_id')
 
         reference_nom = data.get('reference_nom', '').strip() if data.get('reference_nom') else None
         date_souhaitee = data.get('date_souhaitee', '').strip() if data.get('date_souhaitee') else None
@@ -946,6 +977,8 @@ def addSample(client_id):
         quantite = data.get('quantite')
         etat = data.get('etat', '').strip() if data.get('etat') else None
         note = data.get('note', '').strip() if data.get('note') else None
+        if not client_id:
+            return jsonify({"error": "client_id est obligatoire"})
 #### le nom est obligatoire (pour le moment)
         if not reference_nom:
             return jsonify({"error": "Le champ 'reference_nom' est obligatoire."}), 400
@@ -995,13 +1028,16 @@ def addSample(client_id):
             connexion.close()  
 
 
-@app.route('/DeleteSamples/<int:client_id>', methods=['DELETE'])
-def deleteSamples(client_id):
+@app.route('/DeleteSamples', methods=['DELETE'])
+def deleteSamples():
     data = request.get_json()  # Récupère les données de la requête en JSON
     sample_ids = data.get('sample_ids')  # Récupère la liste des sample_ids
+    client_id = data.get('client_id')
 
     if not sample_ids or not isinstance(sample_ids, list):
         return jsonify({"error": "Veuillez fournir une liste valide d'IDs d'échantillons."}), 400
+    if not client_id:
+        return jsonify({"error": "client_id est obligatoire"})
 
     connexion = None
     cursor = None
@@ -1047,16 +1083,22 @@ def deleteSamples(client_id):
         if connexion:
             connexion.close()
 
-@app.route('/UpdateSample/<int:client_id>/<int:sample_id>', methods = ["PUT"])
-def updateSample(client_id, sample_id):
+@app.route('/UpdateSample', methods = ["PUT"])
+def updateSample():
    
     data = request.json
+    client_id = data.get('client_id')
+    sample_id = data.get('sample_id')
     reference_nom = data.get('reference_nom', '').strip()
     date_souhaitee = data.get('date_souhaitee', '').strip()
     date_envoi = data.get('date_envoi', '').strip()
     quantite = data.get('quantite')
     etat = data.get('etat', '').strip()
     note = data.get('note', '').strip()
+    if not client_id:
+        return jsonify({"error": "client_id est obligatoire"})
+    if not sample_id:
+        return jsonify({"error": "sample_id est obligatoire"})
     
     # Convertir les dates au format yyyy-mm-dd pour être compatibles avec SQL
     def convert_to_date(date_str):
@@ -1124,11 +1166,12 @@ def updateSample(client_id, sample_id):
 
 
 ### API pour relation client
-@app.route('/GetRecords/<int:client_id>', methods=["POST"])
-def getRecords(client_id):
+@app.route('/GetRecords', methods=["POST"])
+def getRecords():
     try:
         # Récupération des paramètres dans le corps de la requête
         data = request.get_json()
+        client_id = data.get('client_id')
         
         date_min = data.get("date_min")
         date_max = data.get("date_max")
@@ -1137,9 +1180,12 @@ def getRecords(client_id):
         favori = data.get("favori")
         important = data.get("important")
         text = data.get('text')
+        if not client_id:
+            return jsonify({"error": "client_id est obligatoire"})
 
         connexion = getConnexion()
         cursor = connexion.cursor()
+
         
         query = """
         SELECT * FROM records WHERE client_id = %s
@@ -1202,12 +1248,13 @@ def getRecords(client_id):
 
 
 
-@app.route('/AddRecord/<int:client_id>', methods = ["POST"])
-def addRecord(client_id):
+@app.route('/AddRecord', methods = ["POST"])
+def addRecord():
     connexion = getConnexion()
     cursor = connexion.cursor()
     try:
         data = request.get_json()
+        client_id = data.get('client_id')
         record_time = data.get('record_time', '').strip() if data.get('record_time') else None
         record_type = data.get('record_type', '').strip().lower() 
         nom = data.get('nom', '')
@@ -1215,6 +1262,8 @@ def addRecord(client_id):
         record_text = data.get('record_text', '')
         favori = data.get('favori')
         important = data.get('important')
+        if not client_id:
+            return jsonify({"error": "client_id est obligatoire"})
 
         valid_record_types = ["commentaire", "interaction", "action", "réclamation"]
 
@@ -1252,12 +1301,14 @@ def addRecord(client_id):
 
 
 ###############"" les API pour les produits ###############"
-@app.route('/GetProductsList/<int:company_id>', methods=['POST'])
-def getProductsList(company_id):
+@app.route('/GetProductsList', methods=['POST'])
+def getProductsList():
     try:
         # Récupération des paramètres dans le corps de la requête
         data = request.get_json()
+        company_id = data.get('company_id')
 
+        # Paramètres de recherche
         reference = data.get('reference')
         nom = data.get('nom')
         date_min = data.get('date_min') 
@@ -1268,75 +1319,87 @@ def getProductsList(company_id):
         sort_by = data.get('sort_by')
         sort_order = data.get('sort_order', 'asc')
 
-        # Convertir le paramètre 'page' en int avec une valeur par défaut de 1
+        # Pagination
         page = int(data.get('page', 1))
         limit = int(data.get('limit', 3))
         offset = (page - 1) * limit
 
+        # Vérification de la présence de company_id
+        if not company_id:
+            return jsonify({"error": "company_id est obligatoire"}), 400
+
+        # Connexion à la base de données
         connexion = getConnexion()
         cursor = connexion.cursor()
-        
+
+        # Début de la requête SQL
         query = """
-        SELECT p.id, p.reference, p.nom, p.date_derniere_commande, p.quantite_stock, GROUP_CONCAT(s.nom SEPARATOR ', ') as secteurs
-        FROM produit p 
-        LEFT JOIN produit_secteur ps ON p.id = ps.produit_id
-        LEFT JOIN secteur s ON ps.secteur_id = s.id
-        where p.company_id = %s
+            SELECT p.id, p.reference, p.nom, p.date_derniere_commande, p.quantite_stock, GROUP_CONCAT(s.nom SEPARATOR ', ') as secteurs
+            FROM produit p 
+            LEFT JOIN produit_secteur ps ON p.id = ps.produit_id
+            LEFT JOIN secteur s ON ps.secteur_id = s.id
+            WHERE p.company_id = %s
         """
         params = [company_id]
         conditions = []
-        
+
+        # Ajout des filtres dynamiques
         if reference:
             conditions.append("p.reference = %s")
             params.append(reference)
         if nom:
             conditions.append("p.nom LIKE %s")
-            params.append(nom + '%') 
+            params.append(nom + '%')
         if date_min:
             try:
                 date_obj = datetime.strptime(date_min, '%d/%m/%Y').date()
                 conditions.append("p.date_derniere_commande >= %s")
                 params.append(date_obj)
             except ValueError:
-                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
+                return jsonify({"error": "Format de date incorrect. Utilisez jj/mm/aaaa."}), 400
         if date_max:
             try:
                 date_obj = datetime.strptime(date_max, '%d/%m/%Y').date()
                 conditions.append("p.date_derniere_commande <= %s")
                 params.append(date_obj)
             except ValueError:
-                return jsonify({"error": "Invalid date format. Use dd/mm/yyyy."}), 400
-        if quantite_min is not None:  
+                return jsonify({"error": "Format de date incorrect. Utilisez jj/mm/aaaa."}), 400
+        if quantite_min is not None:
             conditions.append("p.quantite_stock >= %s")
             params.append(quantite_min)
-        if quantite_max is not None:  
+        if quantite_max is not None:
             conditions.append("p.quantite_stock <= %s")
             params.append(quantite_max)
         if secteur:
             conditions.append("""
-            p.id IN (SELECT produit_id FROM produit_secteur ps
-                      JOIN secteur s ON ps.secteur_id = s.id
-                      WHERE s.nom = %s)
+                p.id IN (SELECT produit_id FROM produit_secteur ps
+                         JOIN secteur s ON ps.secteur_id = s.id
+                         WHERE s.nom = %s)
             """)
             params.append(secteur)
 
+        # Ajout des conditions à la requête SQL
         if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        
+            query += " AND " + " AND ".join(conditions)
+
+        # Ajout de GROUP BY et ORDER BY
         query += """
-        GROUP BY p.id, p.reference, p.nom, p.date_derniere_commande, p.quantite_stock
+            GROUP BY p.id, p.reference, p.nom, p.date_derniere_commande, p.quantite_stock
         """
 
         if sort_by:
             order = "DESC" if sort_order.lower() == 'desc' else "ASC"
             query += f" ORDER BY p.{sort_by} {order}"
-        
+
+        # Ajout de LIMIT et OFFSET pour la pagination
         query += " LIMIT %s OFFSET %s"
         params.extend([limit, offset])
 
+        # Exécution de la requête
         cursor.execute(query, params)
         rows = cursor.fetchall()
 
+        # Traitement des résultats
         produits = []
         for row in rows:
             produit = {
@@ -1349,21 +1412,24 @@ def getProductsList(company_id):
             }
             produits.append(produit)
 
+        # Conversion en JSON et réponse
         json_response = json.dumps(produits, ensure_ascii=False, indent=4)
         return Response(json_response, mimetype='application/json'), 200
 
     except Exception as e:
+        # Gestion des erreurs
         return Response(json.dumps({'error': str(e)}), mimetype='application/json'), 500
 
-
-
-@app.route('/GetProductDetails/<int:product_id>', methods=["POST"])
-def getProductDetails(product_id):
+@app.route('/GetProductDetails', methods=["POST"])
+def getProductDetails():
     try:
         # Récupération des données dans le corps de la requête
         data = request.get_json()
+        product_id = data.get('product_id')
         connexion = getConnexion()
         cursor = connexion.cursor()
+        if not product_id:
+            return jsonify({"error": "product_id est obligatoire"})
 
         query = """
         SELECT p.reference, p.nom, p.quantite_stock, p.prix_vente, p.note_commentaire
@@ -1433,10 +1499,16 @@ def getProductDetails(product_id):
         connexion.close()
 
 
-@app.route('/UpdateProduct/<int:product_id>', methods=['PUT'])
-def updateProduct(product_id):
+@app.route('/UpdateProduct', methods=['PUT'])
+def updateProduct():
+    connexion = None
+    cursor = None
     try:
         data = request.get_json()
+        product_id = data.get('product_id')
+
+        if not product_id:
+            return jsonify({"error": "product_id est obligatoire"}), 400
 
         note_commentaire = data.get('note_commentaire')
         seuil = data.get('seuil')
@@ -1477,15 +1549,16 @@ def updateProduct(product_id):
                 cursor.execute(query_date, (date_obj, product_id, variante_id))
 
         connexion.commit()
-
         return jsonify({"message": "Product updated successfully"}), 200
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
     finally:
-        cursor.close()
-        connexion.close()
+        if cursor:
+            cursor.close()
+        if connexion:
+            connexion.close()
 
 
 @app.route('/GetProducts', methods=['POST'])
@@ -1628,11 +1701,12 @@ def getProductPurchase(product_id):
         connexion.close()
 
 
-@app.route('/GetProductSales/<int:product_id>', methods=["POST"])
-def getProductSales(product_id):
+@app.route('/GetProductSales', methods=["POST"])
+def getProductSales():
     try:
         # Retrieve parameters from JSON body
         data = request.json
+        product_id = data.get('product_id')
         numero_facture = data.get('numero_facture')
         reference_client = data.get('reference_client')
         raison_sociale = data.get('raison_sociale')
@@ -1647,6 +1721,8 @@ def getProductSales(product_id):
         sort_order = data.get('sort_order', 'asc')
         page = int(data.get('page', 1))
         per_page = int(data.get('per_page', 2))
+        if not product_id:
+            return jsonify({"error": "product_id est obligatoire"})
 
         connexion = getConnexion()
         cursor = connexion.cursor()
@@ -1738,11 +1814,12 @@ def getProductSales(product_id):
         cursor.close()
         connexion.close()
 
-@app.route('/GetSamplesOfProduct/<int:product_id>', methods=["POST"])
-def getSamplesOfProduct(product_id):
+@app.route('/GetSamplesOfProduct', methods=["POST"])
+def getSamplesOfProduct():
     try:
         # Retrieve parameters from JSON body
         data = request.json
+        product_id = data.get('product_id')
         reference_client = data.get('reference_client')
         raison_sociale = data.get('raison_sociale')
         date_souhaitee_min = data.get('date_souhaitee_min')
@@ -1757,6 +1834,9 @@ def getSamplesOfProduct(product_id):
         sort_order = data.get('sort_order', 'asc')
         page = int(data.get('page', 1))
         per_page = int(data.get('per_page', 2))
+
+        if not product_id:
+            return jsonify({"error": "product_id est obligatoire"})
 
         connexion = getConnexion()
         cursor = connexion.cursor()
@@ -1863,9 +1943,19 @@ def getSamplesOfProduct(product_id):
         cursor.close()
         connexion.close()
 
-@app.route('/GetProductSampleDetails/<int:product_id>/<int:sample_id>', methods=["POST"])
-def getProductSampleDetails(product_id, sample_id):
+@app.route('/GetProductSampleDetails', methods=["POST"])
+def getProductSampleDetails():
+    cursor = None
+    connexion = None
     try:
+        data = request.get_json()
+        product_id = data.get('product_id')
+        sample_id = data.get('sample_id')
+        if not product_id:
+            return jsonify({"error": "product_id est obligatoire"}), 400
+        if not sample_id:
+            return jsonify({"error": "sample_id est obligatoire"}), 400
+        
         connexion = getConnexion()
         cursor = connexion.cursor()
 
@@ -1878,7 +1968,7 @@ def getProductSampleDetails(product_id, sample_id):
         cursor.execute(query, params)
         row = cursor.fetchone()
 
-        if row:  
+        if row:
             detail = {
                 'raison_sociale': row[0],
                 'date_souhaitee': row[1].strftime('%d/%m/%Y') if row[1] else None,
@@ -1895,21 +1985,27 @@ def getProductSampleDetails(product_id, sample_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
-        cursor.close()
-        connexion.close()
+        if cursor:
+            cursor.close()
+        if connexion:
+            connexion.close()
 
-@app.route('/AddSampleOfProduct/<int:product_id>', methods=["POST"])
-def addSampleOfProduct(product_id):
+@app.route('/AddSampleOfProduct', methods=["POST"])
+def addSampleOfProduct():
     try:
         connexion = getConnexion()
         cursor = connexion.cursor()
         data = request.get_json()
+        product_id = data.get('product_id')
         raison_sociale = data.get('raison_sociale', '').strip() if data.get('raison_sociale') else None
         date_souhaitee = data.get('date_souhaitee', '').strip() if data.get('date_souhaitee') else None
         date_envoi = data.get('date_envoi', '').strip() if data.get('date_envoi') else None
         quantite = data.get('quantite')
         etat = data.get('etat', '').strip() if data.get('etat') else None
         note = data.get('note', '').strip() if data.get('note') else None
+
+        if not product_id:
+            return jsonify({"error": "product_id est obligatoire"})
 
         if not raison_sociale:
             return jsonify({"error": "Le champ raison sociale est obligatoire"}), 400
@@ -1994,18 +2090,25 @@ def getCompanyName():
             connexion.close()
 
 
-@app.route('/UpdateSampleOfProduct/<int:product_id>/<int:sample_id>', methods=["PUT"])
-def updateSampleOfProduct(product_id, sample_id):
+@app.route('/UpdateSampleOfProduct', methods=["PUT"])
+def updateSampleOfProduct():
     connexion = getConnexion()
     cursor = connexion.cursor()
 
     data = request.get_json()
+    product_id = data.get('product_id')
+    sample_id = data.get('sample_id')
     raison_sociale = data.get('raison_sociale', '').strip()
     date_souhaitee = data.get('date_souhaitee', '').strip() if data.get('date_souhaitee') else None
     date_envoi = data.get('date_envoi', '').strip() if data.get('date_envoi') else None
     quantite = data.get('quantite')
     etat = data.get('etat', '').strip()
     note = data.get('note', '').strip()
+    
+    if not product_id:
+        return jsonify({"error": "product_id est obligatoire"})
+    if not sample_id:
+        return jsonify({"error": "sample_id est obligatoire"})
 
     # Vérification de l'état
     valid_etat = ["demandé", "envoyé", "homologué", "non homologué"]
@@ -2070,8 +2173,8 @@ def updateSampleOfProduct(product_id, sample_id):
 
     return jsonify({"message": "Echantillon mis à jour avec succès"})
 
-@app.route('/DeleteSamplesOfProduct/<int:product_id>', methods=["DELETE"])
-def deleteSamplesOfProduct(product_id):
+@app.route('/DeleteSamplesOfProduct', methods=["DELETE"])
+def deleteSamplesOfProduct():
     connexion = None
     cursor = None
     try:
@@ -2079,7 +2182,11 @@ def deleteSamplesOfProduct(product_id):
         cursor = connexion.cursor()
 
         request_data = request.get_json()
+        product_id = request_data.get('product_id')
         sample_ids = request_data.get('sample_ids')
+
+        if not product_id:
+            return jsonify({"error": "product_id est obligatoire"})
 
         if not sample_ids or not isinstance(sample_ids, list):
             return jsonify({"error": "Veuillez fournir une liste valide d'IDs d'échantillons."}), 400
