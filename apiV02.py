@@ -628,7 +628,7 @@ def GetOrders():
         sort_by = data.get('sort_by')
         sort_order = data.get('sort_order', 'asc')
         page = int(data.get('page', 1))
-        limit = int(data.get('limit', 2))
+        limit = int(data.get('limit', 10))
         offset = (page - 1) * limit
         if not company_id:
             return jsonify({"error": "company_id est obligatoire"})
@@ -815,7 +815,7 @@ def getPayments():
         sort_by = data.get("sort_by")
         sort_order = data.get("sort_order", 'asc')
         page = int(data.get('page', 1))
-        page_size = int(data.get('page_size', 2))
+        page_size = int(data.get('page_size', 10))
         offset = (page - 1) * page_size
         if not client_id:
             return jsonify({"error": "client_id est obligatoire"})
@@ -1180,6 +1180,8 @@ def getRecords():
         favori = data.get("favori")
         important = data.get("important")
         text = data.get('text')
+        page = data.get('page', 1)
+        page_size = data.get('page_size', 20)
         if not client_id:
             return jsonify({"error": "client_id est obligatoire"})
 
@@ -1223,6 +1225,9 @@ def getRecords():
         if text:
             query += " AND record_text LIKE %s"
             params.append(f'%{text}%')  # Utilisation de % pour faire une recherche LIKE
+        offset = (page - 1) * page_size
+        query += " ORDER BY record_date_time DESC LIMIT %s OFFSET %s"
+        params.extend([page_size, offset])
         
         cursor.execute(query, params)
         rows = cursor.fetchall()
@@ -1239,7 +1244,12 @@ def getRecords():
             }
             records.append(record)
         
-        return jsonify(records), 200
+        #return jsonify(records), 200
+        return jsonify({
+            "page": page,
+            "page_size": page_size,
+            "records": records
+        }), 200
     except Exception as e:
         return jsonify({"message": str(e)}), 500
     finally:
@@ -1321,7 +1331,7 @@ def getProductsList():
 
         # Pagination
         page = int(data.get('page', 1))
-        limit = int(data.get('limit', 3))
+        limit = int(data.get('limit', 10))
         offset = (page - 1) * limit
 
         # Vérification de la présence de company_id
@@ -1720,7 +1730,7 @@ def getProductSales():
         sort_by = data.get('sort_by')
         sort_order = data.get('sort_order', 'asc')
         page = int(data.get('page', 1))
-        per_page = int(data.get('per_page', 2))
+        per_page = int(data.get('per_page', 10))
         if not product_id:
             return jsonify({"error": "product_id est obligatoire"})
 
@@ -1833,7 +1843,7 @@ def getSamplesOfProduct():
         sort_by = data.get('sort_by')
         sort_order = data.get('sort_order', 'asc')
         page = int(data.get('page', 1))
-        per_page = int(data.get('per_page', 2))
+        per_page = int(data.get('per_page', 10))
 
         if not product_id:
             return jsonify({"error": "product_id est obligatoire"})
